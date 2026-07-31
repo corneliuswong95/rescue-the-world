@@ -64,6 +64,7 @@ export class RaycastWeapon {
   private readonly viewmodel = new THREE.Group();
   private readonly muzzle = new THREE.Object3D();
   private readonly muzzleFlash: THREE.Mesh;
+  private readonly muzzleLight: THREE.PointLight;
   private flashTimer = 0;
   private kick = 0;
   private readonly baseVmPos = new THREE.Vector3(0.17, -0.16, -0.62);
@@ -96,6 +97,9 @@ export class RaycastWeapon {
     this.muzzleFlash.visible = false;
     this.muzzleFlash.renderOrder = 4;
     this.muzzle.add(this.muzzleFlash);
+
+    this.muzzleLight = new THREE.PointLight(0xffcf8a, 0, 9, 2);
+    this.muzzle.add(this.muzzleLight);
 
     this.hooks.onAmmo(this.mag, this.reserve, false);
   }
@@ -161,6 +165,7 @@ export class RaycastWeapon {
       this.flashTimer -= dt;
       if (this.flashTimer <= 0) this.muzzleFlash.visible = false;
     }
+    this.muzzleLight.intensity = THREE.MathUtils.damp(this.muzzleLight.intensity, 0, 30, dt);
   }
 
   private startReload(): void {
@@ -225,6 +230,7 @@ export class RaycastWeapon {
     this.muzzleFlash.rotation.z = Math.random() * Math.PI;
     this.muzzleFlash.scale.setScalar(0.8 + Math.random() * 0.5);
     this.flashTimer = 0.04;
+    this.muzzleLight.intensity = 7;
 
     this.recoil.pitch += 0.016;
     this.recoil.yaw += (Math.random() - 0.5) * 0.008;

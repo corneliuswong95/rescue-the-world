@@ -10,6 +10,8 @@ import * as THREE from 'three/webgpu';
 import { createRenderer } from './engine/renderer';
 import { createStatsOverlay } from './engine/stats';
 import { createFixedLoop } from './engine/loop';
+import { setupEnvironment } from './engine/environment';
+import { createPost } from './engine/post';
 import { initPhysics, createPhysicsWorld } from './physics/world';
 import { Input } from './input/input';
 import { Player } from './player/player';
@@ -36,8 +38,7 @@ const physics = createPhysicsWorld(STEP_HZ);
 
 // --- Scene, camera, lighting ---
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x223141);
-scene.fog = new THREE.Fog(0x223141, 55, 170);
+scene.fog = new THREE.Fog(0x45566b, 60, 180);
 
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, 300);
 scene.add(camera);
@@ -46,9 +47,13 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix();
 });
 
-const hemi = new THREE.HemisphereLight(0xcfe0ff, 0x3a352c, 1.6);
+// IBL (PMREM RoomEnvironment) + gradient sky. Provides the ambient fill so the hemisphere
+// light can be gentle; the sun stays as the shadow-casting key.
+setupEnvironment(renderer, scene);
+
+const hemi = new THREE.HemisphereLight(0xcfe0ff, 0x3a352c, 0.22);
 scene.add(hemi);
-const sun = new THREE.DirectionalLight(0xfff2e0, 3.0);
+const sun = new THREE.DirectionalLight(0xfff2e0, 3.3);
 sun.position.set(12, 18, 8);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
@@ -78,6 +83,7 @@ const enemyTracers = new Tracers(scene, 48, 0xff5a3c);
 const blood = new ParticleBursts(scene, 512);
 const hud = createHud();
 const stats = createStatsOverlay(renderer, backendName);
+const post = createPost(renderer, scene, camera);
 
 const _bloodDir = new THREE.Vector3();
 const weapon = new RaycastWeapon(camera, physics.world, decals, player.collider, {
@@ -170,7 +176,7 @@ const loop = createFixedLoop(STEP_HZ, {
       cleared ? 'SECTOR CLEAR' : `ELIMINATE HOSTILES — ${left} / ${totalEnemies}`,
     );
 
-    renderer.render(scene, camera);
+    post.render();
     stats.sample(frameMs);
   },
 });

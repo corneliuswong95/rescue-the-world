@@ -35,7 +35,7 @@ export function createPost(
   const lit = color.mul(vec4(vec3(aoOut.r), 1));
 
   // Threshold bloom — only genuinely bright pixels glow.
-  const bloomPass = bloom(lit, 0.5, 0.5, 0.82);
+  const bloomPass = bloom(lit, 0.35, 0.5, 0.9);
   post.outputNode = lit.add(bloomPass);
 
   return {

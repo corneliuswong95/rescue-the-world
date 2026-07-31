@@ -6,4 +6,7 @@ ingest assets from a commercial game (models, textures, audio, maps, UI, logos, 
 
 | Asset | Type | Source | License | Notes |
 |---|---|---|---|---|
-| _(none yet)_ | | | | |
+| kloofendal_43d_clear_puresky (1k) | HDRI | PolyHaven — polyhaven.com/a/kloofendal_43d_clear_puresky | CC0 | Scene IBL + skybox. `public/assets/hdri/kloofendal_puresky_1k.hdr` |
+| Concrete034 (1K JPG) | PBR texture | ambientCG — ambientcg.com/view?id=Concrete034 | CC0 | Floor. Color/NormalGL/Roughness → `public/assets/textures/floor/` |
+| Plaster001 (1K JPG) | PBR texture | ambientCG — ambientcg.com/view?id=Plaster001 | CC0 | Walls + relief on accent/pillar. `public/assets/textures/wall/` |
+| Cardboard004 (1K JPG) | PBR texture | ambientCG — ambientcg.com/view?id=Cardboard004 | CC0 | Crates. `public/assets/textures/crate/` |

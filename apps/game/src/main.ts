@@ -16,6 +16,7 @@ import { initPhysics, createPhysicsWorld } from './physics/world';
 import { Input } from './input/input';
 import { Player } from './player/player';
 import { buildGreybox } from './level/greybox';
+import { loadLevelMaterials } from './level/materials';
 import { DecalPool } from './weapons/decals';
 import { RaycastWeapon } from './weapons/weapon';
 import { createHud } from './ui/hud';
@@ -48,13 +49,13 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix();
 });
 
-// IBL (PMREM RoomEnvironment) + gradient sky. Provides the ambient fill so the hemisphere
-// light can be gentle; the sun stays as the shadow-casting key.
-setupEnvironment(renderer, scene);
+// IBL + skybox from a real HDRI. Provides the ambient fill so the hemisphere light can be
+// gentle; the sun stays as the shadow-casting key.
+await setupEnvironment(renderer, scene);
 
-const hemi = new THREE.HemisphereLight(0xcfe0ff, 0x3a352c, 0.22);
+const hemi = new THREE.HemisphereLight(0xcfe0ff, 0x3a352c, 0.1);
 scene.add(hemi);
-const sun = new THREE.DirectionalLight(0xfff2e0, 3.3);
+const sun = new THREE.DirectionalLight(0xfff2e0, 1.7);
 sun.position.set(12, 18, 8);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
@@ -69,7 +70,8 @@ sun.shadow.normalBias = 0.03;
 scene.add(sun);
 
 // --- World + navmesh ---
-const collideMeshes = buildGreybox(scene, physics.world);
+const levelMats = await loadLevelMaterials();
+const collideMeshes = buildGreybox(scene, physics.world, levelMats);
 const nav = new Navigation(collideMeshes);
 
 // --- Player + weapon + combat services ---

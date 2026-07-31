@@ -8,16 +8,9 @@
 import * as THREE from 'three/webgpu';
 import { RAPIER } from '../physics/world';
 import type RAPIER_NS from '@dimforge/rapier3d-compat';
+import type { LevelMaterials } from './materials';
 
 const SHARED_BOX = new THREE.BoxGeometry(1, 1, 1);
-
-const MAT = {
-  floor: new THREE.MeshStandardMaterial({ color: 0x5a626c, roughness: 0.95, metalness: 0.0 }),
-  wall: new THREE.MeshStandardMaterial({ color: 0x76808c, roughness: 0.9, metalness: 0.0 }),
-  crate: new THREE.MeshStandardMaterial({ color: 0xa8987c, roughness: 0.8, metalness: 0.05 }),
-  accent: new THREE.MeshStandardMaterial({ color: 0xc85a3c, roughness: 0.7, metalness: 0.05 }),
-  pillar: new THREE.MeshStandardMaterial({ color: 0x8891a0, roughness: 0.85, metalness: 0.0 }),
-} as const;
 
 type Vec3 = [number, number, number];
 
@@ -63,7 +56,11 @@ function addBox(
 }
 
 /** Builds the room; returns the collidable meshes (used as navmesh input geometry). */
-export function buildGreybox(scene: THREE.Scene, world: RAPIER_NS.World): THREE.Mesh[] {
+export function buildGreybox(
+  scene: THREE.Scene,
+  world: RAPIER_NS.World,
+  MAT: LevelMaterials,
+): THREE.Mesh[] {
   const collide: THREE.Mesh[] = [];
   const add = (spec: BoxSpec): void => addBox(scene, world, collide, spec);
 

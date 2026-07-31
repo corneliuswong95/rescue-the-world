@@ -13,6 +13,7 @@ import type RAPIER_NS from '@dimforge/rapier3d-compat';
 import type { Navigation } from './navmesh';
 import type { HitRegistry, Hittable } from '../combat/hittable';
 import type { Tracers } from '../vfx/tracers';
+import type { Sfx } from '../audio/audio';
 
 export interface PlayerTarget {
   eye(out: THREE.Vector3): THREE.Vector3;
@@ -28,6 +29,7 @@ export interface EnemyDeps {
   registry: HitRegistry;
   tracers: Tracers; // reddish enemy tracers
   player: PlayerTarget;
+  sfx: Sfx;
 }
 
 const RADIUS = 0.35;
@@ -173,6 +175,7 @@ export class Enemy implements Hittable {
     this.deps.registry.unregister(this.collider.handle);
     this.collider.setSensor(true); // no longer blocks shots/movement
     this.muzzleFlash.visible = false;
+    this.deps.sfx.enemyDeath(this.pos);
   }
 
   /** Player gunfire heard from `pos`. */
@@ -404,6 +407,7 @@ export class Enemy implements Hittable {
 
     this.group.localToWorld(this._muzzle.copy(this.muzzleFlash.position));
     this.deps.tracers.spawn(this._muzzle, this._end);
+    this.deps.sfx.gunshot(this._muzzle);
     this.muzzleFlash.visible = true;
     this.muzzleFlash.scale.setScalar(0.8 + Math.random() * 0.5);
     this.flashTimer = 0.05;

@@ -10,6 +10,7 @@ import type RAPIER_NS from '@dimforge/rapier3d-compat';
 import { DecalPool } from './decals';
 import type { Tracers } from '../vfx/tracers';
 import type { HitRegistry } from '../combat/hittable';
+import type { Sfx } from '../audio/audio';
 
 const FIRE_INTERVAL = 0.086; // seconds between shots (~700 RPM)
 const MAX_RANGE = 200;
@@ -27,8 +28,9 @@ export interface ViewRecoil {
 export interface WeaponHooks {
   registry: HitRegistry;
   tracers: Tracers;
-  /** Spawn a blood burst at an enemy hit. */
-  blood: (point: THREE.Vector3, dir: THREE.Vector3) => void;
+  sfx: Sfx;
+  /** Spawn impact VFX at a hit point (`flesh` selects blood vs. dust/sparks). */
+  impactFx: (point: THREE.Vector3, dir: THREE.Vector3, flesh: boolean) => void;
   /** Player landed a hit on something damageable. */
   onHitmarker: (headshot: boolean, killed: boolean) => void;
   /** Ammo changed (mag, reserve, reloading). */
@@ -171,6 +173,7 @@ export class RaycastWeapon {
   private startReload(): void {
     if (this.reloadTimer > 0 || this.mag >= MAG_SIZE || this.reserve <= 0) return;
     this.reloadTimer = RELOAD_TIME;
+    this.hooks.sfx.reload();
     this.hooks.onAmmo(this.mag, this.reserve, true);
   }
 
@@ -189,6 +192,8 @@ export class RaycastWeapon {
   }
 
   private fire(): void {
+    this.hooks.sfx.gunshot(); // player's weapon: centred
+
     // Ray from the camera centre (crosshair), excluding the player's own collider.
     this.camera.getWorldPosition(this._origin);
     this.camera.getWorldDirection(this._dir);
@@ -212,11 +217,14 @@ export class RaycastWeapon {
         const headshot = this._hit.y >= target.headY();
         const dmg = BODY_DAMAGE * (headshot ? HEAD_MULT : 1);
         const killed = target.onHit(dmg, this._hit, headshot);
-        this.hooks.blood(this._hit, this._dir);
+        this.hooks.impactFx(this._hit, this._dir, true);
+        this.hooks.sfx.impact(this._hit, true);
         this.hooks.onHitmarker(headshot, killed);
       } else {
         this._normal.set(hit.normal.x, hit.normal.y, hit.normal.z);
         this.decals.spawn(this._hit, this._normal);
+        this.hooks.impactFx(this._hit, this._dir, false);
+        this.hooks.sfx.impact(this._hit, false);
       }
       endPoint = this._hit;
     } else {

@@ -25,6 +25,7 @@ import { HitRegistry } from './combat/hittable';
 import { Tracers } from './vfx/tracers';
 import { ParticleBursts } from './vfx/particles';
 import { EnemyManager } from './ai/enemies';
+import { AudioEngine } from './audio/audio';
 
 const STEP_HZ = 60;
 
@@ -80,20 +81,30 @@ const registry = new HitRegistry();
 const decals = new DecalPool(scene);
 const playerTracers = new Tracers(scene, 32, 0xffe08a);
 const enemyTracers = new Tracers(scene, 48, 0xff5a3c);
-const blood = new ParticleBursts(scene, 512);
+const particles = new ParticleBursts(scene, 512);
 const hud = createHud();
 const stats = createStatsOverlay(renderer, backendName);
 const post = createPost(renderer, scene, camera);
+const audio = new AudioEngine();
+renderer.domElement.addEventListener('mousedown', () => audio.resume());
 
-const _bloodDir = new THREE.Vector3();
+const _fxDir = new THREE.Vector3();
+const _audioFwd = new THREE.Vector3();
+const _audioUp = new THREE.Vector3();
+const _audioPos = new THREE.Vector3();
 const weapon = new RaycastWeapon(camera, physics.world, decals, player.collider, {
   registry,
   tracers: playerTracers,
-  blood: (point, dir) => {
-    _bloodDir.copy(dir).multiplyScalar(-1);
-    blood.burst(point, _bloodDir, 12, 0x7a1216, 3.5, 1.1, 0.5);
+  sfx: audio,
+  impactFx: (point, dir, flesh) => {
+    _fxDir.copy(dir).multiplyScalar(-1);
+    if (flesh) particles.burst(point, _fxDir, 12, 0x7a1216, 3.5, 1.1, 0.5);
+    else particles.burst(point, _fxDir, 6, 0xb6a888, 2.4, 1.5, 0.28);
   },
-  onHitmarker: (headshot, killed) => hud.hitmarker(headshot, killed),
+  onHitmarker: (headshot, killed) => {
+    hud.hitmarker(headshot, killed);
+    audio.hitmarker(headshot);
+  },
   onAmmo: (mag, reserve, reloading) => hud.setAmmo(mag, reserve, reloading),
 });
 
@@ -105,6 +116,7 @@ const enemies = new EnemyManager({
   registry,
   tracers: enemyTracers,
   player,
+  sfx: audio,
 });
 enemies.spawnMany([
   new THREE.Vector3(-14, 1, -11),
@@ -152,8 +164,14 @@ const loop = createFixedLoop(STEP_HZ, {
 
     playerTracers.update(dt);
     enemyTracers.update(dt);
-    blood.update(dt);
+    particles.update(dt);
     hud.update(dt);
+
+    // Audio listener follows the camera.
+    camera.getWorldDirection(_audioFwd);
+    _audioUp.set(0, 1, 0).applyQuaternion(camera.quaternion);
+    player.eye(_audioPos);
+    audio.setListener(_audioPos, _audioFwd, _audioUp);
 
     // Respawn timer.
     if (respawnIn > 0) {

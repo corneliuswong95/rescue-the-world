@@ -26,6 +26,7 @@ import { HitRegistry } from './combat/hittable';
 import { Tracers } from './vfx/tracers';
 import { ParticleBursts } from './vfx/particles';
 import { EnemyManager } from './ai/enemies';
+import { loadCharacterTemplate } from './ai/character';
 import { AudioEngine } from './audio/audio';
 
 const STEP_HZ = 60;
@@ -69,8 +70,8 @@ sun.shadow.bias = -0.0004;
 sun.shadow.normalBias = 0.03;
 scene.add(sun);
 
-// --- World + navmesh ---
-const levelMats = await loadLevelMaterials();
+// --- World + navmesh + enemy character template ---
+const [levelMats] = await Promise.all([loadLevelMaterials(), loadCharacterTemplate()]);
 const collideMeshes = buildGreybox(scene, physics.world, levelMats);
 const nav = new Navigation(collideMeshes);
 
@@ -162,7 +163,7 @@ const loop = createFixedLoop(STEP_HZ, {
       enemies.broadcastGunfire(_qaTmp);
     }
     player.updateCamera(alpha, weapon.recoil.pitch, weapon.recoil.yaw);
-    enemies.render(alpha);
+    enemies.render(alpha, dt);
 
     playerTracers.update(dt);
     enemyTracers.update(dt);

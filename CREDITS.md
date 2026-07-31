@@ -10,3 +10,4 @@ ingest assets from a commercial game (models, textures, audio, maps, UI, logos, 
 | Concrete034 (1K JPG) | PBR texture | ambientCG — ambientcg.com/view?id=Concrete034 | CC0 | Floor. Color/NormalGL/Roughness → `public/assets/textures/floor/` |
 | Plaster001 (1K JPG) | PBR texture | ambientCG — ambientcg.com/view?id=Plaster001 | CC0 | Walls + relief on accent/pillar. `public/assets/textures/wall/` |
 | Cardboard004 (1K JPG) | PBR texture | ambientCG — ambientcg.com/view?id=Cardboard004 | CC0 | Crates. `public/assets/textures/crate/` |
+| RobotExpressive | Rigged + animated model | Tomás Laulhé, mod. Don McCurdy (via three.js examples) | CC0 | Enemy character **placeholder** (Idle/Running/Death). Swap for a Quaternius CC0 soldier later. `public/assets/models/RobotExpressive.glb` |

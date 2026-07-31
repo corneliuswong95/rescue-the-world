@@ -28,9 +28,9 @@ export class EnemyManager {
     for (const e of this.enemies) e.integrate(dt);
   }
 
-  render(alpha: number): void {
+  render(alpha: number, dt: number): void {
     for (let i = this.enemies.length - 1; i >= 0; i--) {
-      if (!this.enemies[i].render(alpha)) this.enemies.splice(i, 1);
+      if (!this.enemies[i].render(alpha, dt)) this.enemies.splice(i, 1);
     }
   }
 

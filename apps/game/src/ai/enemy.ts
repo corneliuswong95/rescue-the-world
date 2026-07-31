@@ -14,6 +14,7 @@ import type { Navigation } from './navmesh';
 import type { HitRegistry, Hittable } from '../combat/hittable';
 import type { Tracers } from '../vfx/tracers';
 import type { Sfx } from '../audio/audio';
+import { CharacterInstance, type AnimState } from './character';
 
 export interface PlayerTarget {
   eye(out: THREE.Vector3): THREE.Vector3;
@@ -74,6 +75,8 @@ export class Enemy implements Hittable {
 
   private readonly muzzleFlash: THREE.Mesh;
   private flashTimer = 0;
+  private readonly character = new CharacterInstance();
+  private animState: AnimState = 'idle';
 
   // scratch
   private readonly _eye = new THREE.Vector3();
@@ -92,7 +95,7 @@ export class Enemy implements Hittable {
     this.pos.copy(spawn);
     this.prevPos.copy(spawn);
 
-    this.buildMesh();
+    this.group.add(this.character.root);
     deps.scene.add(this.group);
 
     const bodyDesc = RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(
@@ -132,25 +135,6 @@ export class Enemy implements Hittable {
     return this.state === 'dead';
   }
 
-  private buildMesh(): void {
-    const uniform = new THREE.MeshStandardMaterial({ color: 0x873f3a, roughness: 0.8, metalness: 0.05 });
-    const skin = new THREE.MeshStandardMaterial({ color: 0xb08a6a, roughness: 0.7 });
-    const gunMat = new THREE.MeshStandardMaterial({ color: 0x2a2d33, roughness: 0.5, metalness: 0.6 });
-
-    const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.32, 0.72, 6, 12), uniform);
-    torso.position.y = -0.06;
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 12), skin);
-    head.position.y = 0.62;
-    const gun = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.1, 0.5), gunMat);
-    gun.position.set(0.16, 0.12, -0.28);
-
-    for (const m of [torso, head, gun]) {
-      m.castShadow = true;
-      m.receiveShadow = true;
-      this.group.add(m);
-    }
-  }
-
   // --- Hittable ---
   headY(): number {
     return this.pos.y + 0.42;
@@ -170,7 +154,8 @@ export class Enemy implements Hittable {
 
   private die(): void {
     this.state = 'dead';
-    this.deathTimer = 1.8;
+    this.animState = 'dead';
+    this.deathTimer = 2.6; // let the death animation finish before cleanup
     this.vel.set(0, 0, 0);
     this.deps.registry.unregister(this.collider.handle);
     this.collider.setSensor(true); // no longer blocks shots/movement
@@ -245,6 +230,10 @@ export class Enemy implements Hittable {
     }
 
     this.applyMovement(dt);
+
+    // Locomotion animation state (dead is set in die()).
+    const moving = Math.hypot(this.vel.x, this.vel.z) > 0.4;
+    this.animState = moving ? 'run' : 'idle';
 
     if (this.flashTimer > 0) {
       this.flashTimer -= dt;
@@ -414,40 +403,30 @@ export class Enemy implements Hittable {
   }
 
   /** Per-frame visual update (interpolated). Returns false when fully cleaned up. */
-  render(alpha: number): boolean {
+  render(alpha: number, dt: number): boolean {
     if (this.state === 'dead' && this.deathTimer <= 0) {
       this.cleanup();
       return false;
     }
+    this.character.play(this.animState);
+    this.character.update(dt);
+
     this.group.position.set(
       this.prevPos.x + (this.pos.x - this.prevPos.x) * alpha,
       this.prevPos.y + (this.pos.y - this.prevPos.y) * alpha,
       this.prevPos.z + (this.pos.z - this.prevPos.z) * alpha,
     );
-    if (this.state === 'dead') {
-      // Topple forward and sink.
-      const t = 1 - this.deathTimer / 1.8;
-      this.group.rotation.x = Math.min(t * 2.2, Math.PI / 2);
-      this.group.position.y -= t * 0.5;
-    } else {
-      this.group.rotation.set(0, this.yaw, 0);
-    }
-    // Keep the muzzle flash facing roughly the player for readability.
-    this.muzzleFlash.quaternion.identity();
+    this.group.rotation.set(0, this.yaw, 0); // death is handled by the Death animation
     return true;
   }
 
   private cleanup(): void {
     this.deps.scene.remove(this.group);
-    this.group.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (m.isMesh) {
-        m.geometry.dispose();
-        const mat = m.material;
-        if (Array.isArray(mat)) mat.forEach((x) => x.dispose());
-        else mat.dispose();
-      }
-    });
+    // The character clone SHARES geometry/materials with the template — only stop its mixer;
+    // never dispose those shared resources. Dispose only this enemy's own muzzle-flash assets.
+    this.character.dispose();
+    this.muzzleFlash.geometry.dispose();
+    (this.muzzleFlash.material as THREE.Material).dispose();
     this.deps.world.removeCollider(this.collider, false);
     this.deps.world.removeRigidBody(this.body);
     this.deps.world.removeCharacterController(this.controller);

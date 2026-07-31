@@ -1,0 +1,15 @@
+{
+  "name": "@operator/qa",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "Playwright screenshot harness for the OPERATOR visual-QA critic loop.",
+  "scripts": {
+    "shoot": "tsx shoot.ts",
+    "browsers": "playwright install chromium"
+  },
+  "devDependencies": {
+    "playwright": "^1.48.0",
+    "tsx": "^4.19.0"
+  }
+}

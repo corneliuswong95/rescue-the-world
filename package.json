@@ -1,0 +1,14 @@
+{
+  "name": "operator",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Agentic-build starter for a browser FPS (Three.js / WebGPU).",
+  "scripts": {
+    "dev": "pnpm --filter @operator/game dev",
+    "build": "pnpm --filter @operator/game build",
+    "preview": "pnpm --filter @operator/game preview",
+    "shoot": "pnpm --filter @operator/qa run shoot",
+    "browsers": "pnpm --filter @operator/qa run browsers"
+  },
+  "packageManager": "pnpm@9.12.0"
+}

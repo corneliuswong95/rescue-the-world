@@ -30,7 +30,12 @@ interface BoxSpec {
   receiveShadow?: boolean;
 }
 
-function addBox(scene: THREE.Scene, world: RAPIER_NS.World, spec: BoxSpec): void {
+function addBox(
+  scene: THREE.Scene,
+  world: RAPIER_NS.World,
+  collide: THREE.Mesh[],
+  spec: BoxSpec,
+): void {
   const [sx, sy, sz] = spec.size;
   const [px, py, pz] = spec.pos;
 
@@ -45,7 +50,9 @@ function addBox(scene: THREE.Scene, world: RAPIER_NS.World, spec: BoxSpec): void
     q.setFromAxisAngle(new THREE.Vector3(1, 0, 0), spec.rotX);
     mesh.quaternion.copy(q);
   }
+  mesh.updateMatrixWorld(true); // navmesh generation reads matrixWorld
   scene.add(mesh);
+  collide.push(mesh);
 
   const bodyDesc = RAPIER.RigidBodyDesc.fixed()
     .setTranslation(px, py, pz)
@@ -55,16 +62,20 @@ function addBox(scene: THREE.Scene, world: RAPIER_NS.World, spec: BoxSpec): void
   world.createCollider(colDesc, body);
 }
 
-export function buildGreybox(scene: THREE.Scene, world: RAPIER_NS.World): void {
+/** Builds the room; returns the collidable meshes (used as navmesh input geometry). */
+export function buildGreybox(scene: THREE.Scene, world: RAPIER_NS.World): THREE.Mesh[] {
+  const collide: THREE.Mesh[] = [];
+  const add = (spec: BoxSpec): void => addBox(scene, world, collide, spec);
+
   // Floor (top surface at y = 0).
-  addBox(scene, world, { size: [40, 0.4, 40], pos: [0, -0.2, 0], material: MAT.floor });
+  add({ size: [40, 0.4, 40], pos: [0, -0.2, 0], material: MAT.floor });
 
   // Perimeter walls (6 m tall, 0.5 m thick).
   const H = 6;
-  addBox(scene, world, { size: [40, H, 0.5], pos: [0, H / 2, -20], material: MAT.wall });
-  addBox(scene, world, { size: [40, H, 0.5], pos: [0, H / 2, 20], material: MAT.wall });
-  addBox(scene, world, { size: [0.5, H, 40], pos: [20, H / 2, 0], material: MAT.wall });
-  addBox(scene, world, { size: [0.5, H, 40], pos: [-20, H / 2, 0], material: MAT.wall });
+  add({ size: [40, H, 0.5], pos: [0, H / 2, -20], material: MAT.wall });
+  add({ size: [40, H, 0.5], pos: [0, H / 2, 20], material: MAT.wall });
+  add({ size: [0.5, H, 40], pos: [20, H / 2, 0], material: MAT.wall });
+  add({ size: [0.5, H, 40], pos: [-20, H / 2, 0], material: MAT.wall });
 
   // Cover crates scattered for shooting/peeking.
   const crates: Vec3[] = [
@@ -76,21 +87,23 @@ export function buildGreybox(scene: THREE.Scene, world: RAPIER_NS.World): void {
     [2, 0.6, -8],
   ];
   for (const p of crates) {
-    addBox(scene, world, { size: [1.2, 1.2, 1.2], pos: p, material: MAT.crate });
+    add({ size: [1.2, 1.2, 1.2], pos: p, material: MAT.crate });
   }
 
   // A couple of accent crates as readability landmarks.
-  addBox(scene, world, { size: [1.2, 1.2, 1.2], pos: [-2, 0.6, 6], material: MAT.accent });
-  addBox(scene, world, { size: [1.2, 1.2, 1.2], pos: [10, 0.6, -6], material: MAT.accent });
+  add({ size: [1.2, 1.2, 1.2], pos: [-2, 0.6, 6], material: MAT.accent });
+  add({ size: [1.2, 1.2, 1.2], pos: [10, 0.6, -6], material: MAT.accent });
 
   // A long low wall for crouch-cover.
-  addBox(scene, world, { size: [8, 1.2, 0.6], pos: [4, 0.6, 10], material: MAT.wall });
+  add({ size: [8, 1.2, 0.6], pos: [4, 0.6, 10], material: MAT.wall });
 
   // Pillars.
-  addBox(scene, world, { size: [1, H, 1], pos: [-10, H / 2, 8], material: MAT.pillar });
-  addBox(scene, world, { size: [1, H, 1], pos: [12, H / 2, -12], material: MAT.pillar });
+  add({ size: [1, H, 1], pos: [-10, H / 2, 8], material: MAT.pillar });
+  add({ size: [1, H, 1], pos: [12, H / 2, -12], material: MAT.pillar });
 
   // Ramp up to a raised platform.
-  addBox(scene, world, { size: [5, 0.4, 4], pos: [-13, 0.9, -8], rotX: -0.32, material: MAT.crate });
-  addBox(scene, world, { size: [7, 0.4, 7], pos: [-16, 1.75, -12], material: MAT.wall });
+  add({ size: [5, 0.4, 4], pos: [-13, 0.9, -8], rotX: -0.32, material: MAT.crate });
+  add({ size: [7, 0.4, 7], pos: [-16, 1.75, -12], material: MAT.wall });
+
+  return collide;
 }

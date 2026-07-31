@@ -25,8 +25,18 @@ const GRAVITY = 24;
 const JUMP_SPEED = 7.2;
 const SENS = 0.0022; // radians per mouse pixel
 
+const MAX_HP = 100;
+
 export class Player {
   readonly collider: RAPIER_NS.Collider;
+
+  /** Called when the player takes damage, with the source direction relative to facing. */
+  onDamaged?: (relAngle: number) => void;
+  /** Called once when health reaches zero. */
+  onDied?: () => void;
+
+  private hp = MAX_HP;
+  private dead = false;
 
   private readonly body: RAPIER_NS.RigidBody;
   private readonly controller: RAPIER_NS.KinematicCharacterController;
@@ -47,7 +57,7 @@ export class Player {
   private readonly wish = new THREE.Vector3();
   private readonly desired = new THREE.Vector3();
   private readonly move = new THREE.Vector3();
-  private readonly eye = new THREE.Vector3();
+  private readonly eyeScratch = new THREE.Vector3();
   private readonly right = new THREE.Vector3();
   private readonly euler = new THREE.Euler(0, 0, 0, 'YXZ');
 
@@ -168,6 +178,47 @@ export class Player {
     this.pos.set(t.x, t.y, t.z);
   }
 
+  // --- Combat / PlayerTarget ---
+  get colliderHandle(): number {
+    return this.collider.handle;
+  }
+  get health(): number {
+    return this.hp;
+  }
+  isAlive(): boolean {
+    return !this.dead;
+  }
+
+  /** Physics-authoritative eye position (no head-bob) for AI perception + aim. */
+  eye(out: THREE.Vector3): THREE.Vector3 {
+    const feetY = this.pos.y - (this.curCyl + RADIUS);
+    const eyeHeight = EYE_STAND + (EYE_CROUCH - EYE_STAND) * this.crouchT;
+    return out.set(this.pos.x, feetY + eyeHeight, this.pos.z);
+  }
+
+  applyDamage(amount: number, fromPos: THREE.Vector3): void {
+    if (this.dead) return;
+    this.hp -= amount;
+    const dx = fromPos.x - this.pos.x;
+    const dz = fromPos.z - this.pos.z;
+    const srcAngle = Math.atan2(dx, dz);
+    const fwdAngle = Math.atan2(-Math.sin(this.yaw), -Math.cos(this.yaw));
+    let rel = srcAngle - fwdAngle;
+    rel = Math.atan2(Math.sin(rel), Math.cos(rel));
+    this.onDamaged?.(rel);
+    if (this.hp <= 0) {
+      this.hp = 0;
+      this.dead = true;
+      this.onDied?.();
+    }
+  }
+
+  respawn(spawn: THREE.Vector3): void {
+    this.hp = MAX_HP;
+    this.dead = false;
+    this.setPose(spawn.x, spawn.y, spawn.z, Math.PI, 0, 0);
+  }
+
   /** Per-frame mouse-look (responsive; not gated on the sim step). */
   applyLook(lookX: number, lookY: number): void {
     this.yaw -= lookX * SENS;
@@ -183,16 +234,16 @@ export class Player {
     const cz = this.prevPos.z + (this.pos.z - this.prevPos.z) * alpha;
     const feetY = cy - (this.curCyl + RADIUS);
     const eyeHeight = EYE_STAND + (EYE_CROUCH - EYE_STAND) * this.crouchT;
-    this.eye.set(cx, feetY + eyeHeight, cz);
+    this.eyeScratch.set(cx, feetY + eyeHeight, cz);
 
     // Head-bob: vertical + lateral along the camera's right vector.
     const bobY = Math.sin(this.bobPhase * 2) * 0.035 * this.bobAmt;
     const bobX = Math.cos(this.bobPhase) * 0.03 * this.bobAmt;
     this.right.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
-    this.eye.addScaledVector(this.right, bobX);
-    this.eye.y += bobY;
+    this.eyeScratch.addScaledVector(this.right, bobX);
+    this.eyeScratch.y += bobY;
 
-    this.camera.position.copy(this.eye);
+    this.camera.position.copy(this.eyeScratch);
     this.euler.set(this.pitch + recoilPitch, this.yaw + recoilYaw, 0);
     this.camera.quaternion.setFromEuler(this.euler);
   }

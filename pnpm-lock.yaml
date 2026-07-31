@@ -13,6 +13,12 @@ importers:
       '@dimforge/rapier3d-compat':
         specifier: ^0.14.0
         version: 0.14.0
+      '@recast-navigation/three':
+        specifier: ^0.43.1
+        version: 0.43.1(@types/three@0.184.1)(three@0.184.0)
+      recast-navigation:
+        specifier: ^0.43.1
+        version: 0.43.1
       three:
         specifier: ^0.184.0
         version: 0.184.0
@@ -356,6 +362,21 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@recast-navigation/core@0.43.1':
+    resolution: {integrity: sha512-4igfPgnoV90O92sDSIA0xHa6tanh3z/udlgGmD0SqGQ6PKV4JS2l9jWO8YnxfZuXP/NV52H4c5FU6pSdZc9WDA==}
+
+  '@recast-navigation/generators@0.43.1':
+    resolution: {integrity: sha512-w7r6k/A93wWxuSN+Lg+PmlsUVXq06r5bqXmBglolxqDt2O/Y776BIhYtb6P2P6pbYqDWORu9NCZZJzfY4FNpaA==}
+
+  '@recast-navigation/three@0.43.1':
+    resolution: {integrity: sha512-XNA3z7/8SBzTswD9LBQkJ5+1yn4J6dzx5uI2zRFXu6G7UOkFEN+f1PeugJUOUOXNjyVdkaYVOg9dKqpaXtzUDw==}
+    peerDependencies:
+      '@types/three': 0.x.x
+      three: 0.x.x
+
+  '@recast-navigation/wasm@0.43.1':
+    resolution: {integrity: sha512-XFL6PhO8JodwXUHBSAkfaLUdUEweIkJsdP3HTmtJvMs5fkqEWxWJmBskZlACHJepv55NAriqWxOtuLlG3t7+Hg==}
+
   '@rollup/rollup-android-arm-eabi@4.62.3':
     resolution: {integrity: sha512-c0wdcekXtQvvn5Tsrk/+op/gUArrbWaFduBnTLP2l1cKLSQs4diMWjJw3m6A0DdzT8dAAX95KpkJ3qynCePbmw==}
     cpu: [arm]
@@ -556,6 +577,9 @@ packages:
   postcss@8.5.25:
     resolution: {integrity: sha512-DTPx3RWSSnWyzLxQnlH0rJP+EW5ekl16ZU4/psbIhA0e53kJfdgaN5vKM+xP7yJtXVu+nfdVFmlgFDEKAe4Pyw==}
     engines: {node: ^10 || ^12 || >=14}
+
+  recast-navigation@0.43.1:
+    resolution: {integrity: sha512-BVBQEHE6uqD36opJomVkI5TxMVZ8bBLdDn90mYtBUYJnNlqEuNFOL8DH8lLOksfVVaC+kjykYuS57P6MrxVB7A==}
 
   rollup@4.62.3:
     resolution: {integrity: sha512-Gu0c0iH9FzgX1L1t7ByIbbS3Vmdz+6KHm/EsqmmC71gUQ82yvZRkTK6XzrFObSka91WUVdynqp6nsfilzr5k6Q==}
@@ -785,6 +809,24 @@ snapshots:
   '@esbuild/win32-x64@0.28.1':
     optional: true
 
+  '@recast-navigation/core@0.43.1':
+    dependencies:
+      '@recast-navigation/wasm': 0.43.1
+
+  '@recast-navigation/generators@0.43.1':
+    dependencies:
+      '@recast-navigation/core': 0.43.1
+      '@recast-navigation/wasm': 0.43.1
+
+  '@recast-navigation/three@0.43.1(@types/three@0.184.1)(three@0.184.0)':
+    dependencies:
+      '@recast-navigation/core': 0.43.1
+      '@recast-navigation/generators': 0.43.1
+      '@types/three': 0.184.1
+      three: 0.184.0
+
+  '@recast-navigation/wasm@0.43.1': {}
+
   '@rollup/rollup-android-arm-eabi@4.62.3':
     optional: true
 
@@ -968,6 +1010,11 @@ snapshots:
       nanoid: 3.3.16
       picocolors: 1.1.1
       source-map-js: 1.2.1
+
+  recast-navigation@0.43.1:
+    dependencies:
+      '@recast-navigation/core': 0.43.1
+      '@recast-navigation/generators': 0.43.1
 
   rollup@4.62.3:
     dependencies:

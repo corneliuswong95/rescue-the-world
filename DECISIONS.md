@@ -35,3 +35,15 @@ zero extra plugins and no COOP/COEP headers.
 Consequences: Slightly larger JS payload and no SIMD. Revisit and migrate to `-simd`
 (with `vite-plugin-wasm`) if/when we simulate many dynamic rigid bodies (ragdolls, debris)
 and profiling shows the physics step is a bottleneck. Tracked in QUALITY_BACKLOG if it bites.
+
+## 2026-07-31 — Runtime navmesh generation for M2 (vs. offline bake)
+
+Context: PLAN §8 says pre-bake the navmesh offline per level. But the M2 greybox is generated
+in code, not authored in a DCC tool, so there is no `.glb` to bake against — and the geometry
+is fully static and tiny.
+Decision: Generate a solo navmesh at load with `@recast-navigation/three`'s `threeToSoloNavMesh`
+from the greybox collider meshes (`recast-navigation` 0.43.1). `NavMeshQuery.computePath` drives
+bot pathing.
+Consequences: One-time cost at boot (negligible for this room). When real authored levels land
+in M4 we move to the offline bake + import path per PLAN §8; runtime generation stays as the
+fallback for dynamic geometry only.

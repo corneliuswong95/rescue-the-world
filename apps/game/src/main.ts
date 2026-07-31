@@ -1,11 +1,10 @@
 /**
- * OPERATOR — M1 "greybox playground" (feel first).
+ * OPERATOR — M2 "combat core".
  *
- * Boots the WebGPU renderer (auto WebGL2 fallback), a fixed-60 Hz Rapier sim decoupled from
- * the render loop, a kinematic capsule player (WASD + sprint + crouch + jump, momentum,
- * head-bob, Pointer-Lock look), a collidable greybox room, and a placeholder full-auto hitscan
- * weapon with pooled tracers/decals + view recoil. This milestone is about *movement and
- * shooting feel*, not looks. Art/IBL/post arrive in M3.
+ * Builds on M1's greybox + player + weapon: adds a recast navmesh, enemy bots (perception +
+ * FSM + fair fire) that path real geometry and die, damage routed through a hit registry,
+ * player health with death/respawn, and a combat HUD (hitmarkers, ammo, damage direction,
+ * objective). Still greybox art — the look/audio pass is M3.
  */
 import * as THREE from 'three/webgpu';
 import { createRenderer } from './engine/renderer';
@@ -19,14 +18,19 @@ import { DecalPool } from './weapons/decals';
 import { RaycastWeapon } from './weapons/weapon';
 import { createHud } from './ui/hud';
 import { installQaHooks } from './qa';
+import { initNavigation, Navigation } from './ai/navmesh';
+import { HitRegistry } from './combat/hittable';
+import { Tracers } from './vfx/tracers';
+import { ParticleBursts } from './vfx/particles';
+import { EnemyManager } from './ai/enemies';
 
 const STEP_HZ = 60;
 
 const app = document.getElementById('app');
 if (!app) throw new Error('#app container not found');
 
-// --- Physics + renderer both need async init before we build anything ---
 await initPhysics();
+await initNavigation();
 const { renderer, backendName } = await createRenderer(app);
 const physics = createPhysicsWorld(STEP_HZ);
 
@@ -36,7 +40,7 @@ scene.background = new THREE.Color(0x223141);
 scene.fog = new THREE.Fog(0x223141, 55, 170);
 
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, 300);
-scene.add(camera); // so the viewmodel (a child of the camera) is traversed and rendered
+scene.add(camera);
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
@@ -44,7 +48,6 @@ window.addEventListener('resize', () => {
 
 const hemi = new THREE.HemisphereLight(0xcfe0ff, 0x3a352c, 1.6);
 scene.add(hemi);
-
 const sun = new THREE.DirectionalLight(0xfff2e0, 3.0);
 sun.position.set(12, 18, 8);
 sun.castShadow = true;
@@ -59,32 +62,114 @@ sun.shadow.bias = -0.0004;
 sun.shadow.normalBias = 0.03;
 scene.add(sun);
 
-// --- World geometry + player + weapon ---
-buildGreybox(scene, physics.world);
+// --- World + navmesh ---
+const collideMeshes = buildGreybox(scene, physics.world);
+const nav = new Navigation(collideMeshes);
 
+// --- Player + weapon + combat services ---
 const input = new Input(renderer.domElement);
-const spawn = new THREE.Vector3(0, 0.9, 8); // feet on the floor (centre = STAND_HALF + RADIUS)
+const spawn = new THREE.Vector3(0, 0.9, 8);
 const player = new Player(physics.world, input, camera, spawn);
 
+const registry = new HitRegistry();
 const decals = new DecalPool(scene);
-const weapon = new RaycastWeapon(scene, camera, physics.world, decals, player.collider);
-
+const playerTracers = new Tracers(scene, 32, 0xffe08a);
+const enemyTracers = new Tracers(scene, 48, 0xff5a3c);
+const blood = new ParticleBursts(scene, 512);
 const hud = createHud();
 const stats = createStatsOverlay(renderer, backendName);
 
-// --- Loop: fixed-step sim, interpolated render ---
+const _bloodDir = new THREE.Vector3();
+const weapon = new RaycastWeapon(camera, physics.world, decals, player.collider, {
+  registry,
+  tracers: playerTracers,
+  blood: (point, dir) => {
+    _bloodDir.copy(dir).multiplyScalar(-1);
+    blood.burst(point, _bloodDir, 12, 0x7a1216, 3.5, 1.1, 0.5);
+  },
+  onHitmarker: (headshot, killed) => hud.hitmarker(headshot, killed),
+  onAmmo: (mag, reserve, reloading) => hud.setAmmo(mag, reserve, reloading),
+});
+
+// --- Enemies ---
+const enemies = new EnemyManager({
+  scene,
+  world: physics.world,
+  nav,
+  registry,
+  tracers: enemyTracers,
+  player,
+});
+enemies.spawnMany([
+  new THREE.Vector3(-14, 1, -11),
+  new THREE.Vector3(12, 1, -12),
+  new THREE.Vector3(-5, 1, -3),
+  new THREE.Vector3(9, 1, 5),
+]);
+const totalEnemies = 4;
+
+// --- Death / respawn + objective ---
+let respawnIn = 0;
+let cleared = false;
+player.onDamaged = (rel) => hud.damageFrom(rel);
+player.onDied = () => {
+  respawnIn = 2.6;
+  hud.setMessage('YOU DIED');
+};
+
+// --- Loop ---
 const loop = createFixedLoop(STEP_HZ, {
   update: (dt) => {
     player.integrate(dt);
+    enemies.integrate(dt);
     physics.step();
     player.sync();
   },
   render: (alpha, frameMs) => {
+    const dt = frameMs / 1000;
     const fi = input.drain();
-    if (input.isLocked) player.applyLook(fi.lookX, fi.lookY);
-    weapon.update(frameMs / 1000, fi.firePressed, fi.fireHeld);
+    const alive = player.isAlive();
+
+    if (input.isLocked && alive) player.applyLook(fi.lookX, fi.lookY);
+    weapon.update(
+      dt,
+      alive ? fi.firePressed : 0,
+      alive && fi.fireHeld,
+      alive && input.isDown('KeyR'),
+    );
+    if (alive && fi.firePressed > 0) {
+      player.eye(_qaTmp);
+      enemies.broadcastGunfire(_qaTmp);
+    }
     player.updateCamera(alpha, weapon.recoil.pitch, weapon.recoil.yaw);
+    enemies.render(alpha);
+
+    playerTracers.update(dt);
+    enemyTracers.update(dt);
+    blood.update(dt);
+    hud.update(dt);
+
+    // Respawn timer.
+    if (respawnIn > 0) {
+      respawnIn -= dt;
+      if (respawnIn <= 0) {
+        player.respawn(spawn);
+        hud.setMessage(null);
+      }
+    }
+
+    // HUD state.
     hud.setLocked(input.isLocked);
+    hud.setHealth(player.health, 100);
+    const left = enemies.aliveCount();
+    if (left === 0 && !cleared) {
+      cleared = true;
+      hud.setMessage('HOSTILES ELIMINATED');
+    }
+    hud.setObjective(
+      cleared ? 'SECTOR CLEAR' : `ELIMINATE HOSTILES — ${left} / ${totalEnemies}`,
+    );
+
     renderer.render(scene, camera);
     stats.sample(frameMs);
   },
@@ -92,34 +177,43 @@ const loop = createFixedLoop(STEP_HZ, {
 
 renderer.setAnimationLoop(loop.frame);
 
-// --- QA states for the Playwright critic harness ---
-function poseAndRender(x: number, y: number, z: number, yaw: number, pitch: number, crouch = 0): void {
-  player.setPose(x, y, z, yaw, pitch, crouch);
-  player.updateCamera(1, 0, 0); // sync camera immediately so QA raycasts are correct
-}
+// --- QA states ---
+const _qaTmp = new THREE.Vector3();
+const _qaEye = new THREE.Vector3();
 
-// Yaw such that "forward" = (-sin y, 0, -cos y) points along a given XZ heading.
 const yawToward = (dx: number, dz: number): number => Math.atan2(-dx, -dz);
+
+function aimAt(from: THREE.Vector3, target: THREE.Vector3): void {
+  player.setPose(from.x, from.y, from.z, yawToward(target.x - from.x, target.z - from.z), 0);
+  player.eye(_qaEye);
+  const dx = target.x - _qaEye.x;
+  const dy = target.y - _qaEye.y;
+  const dz = target.z - _qaEye.z;
+  const horiz = Math.hypot(dx, dz);
+  const pitch = Math.atan2(dy, horiz);
+  player.setPose(from.x, from.y, from.z, yawToward(dx, dz), pitch);
+  player.updateCamera(1, 0, 0);
+}
 
 installQaHooks({
   states: {
-    // Standing near the middle, looking across the cover cluster toward the ramp/platform.
-    default: () => poseAndRender(9, 0.9, 7, yawToward(-1, -0.55), -0.06),
-    // Crouched, looking across the room (lowered viewpoint vs. default).
-    crouch: () => poseAndRender(2, 0.9, 14, yawToward(-0.3, -1), 0.03, 1),
-    // West wall peppered with impact decals, to show hit feedback registers.
-    impacts: () => {
-      const px = -11;
-      const pz = 0;
-      const baseYaw = yawToward(-1, 0); // face the west wall (x = -20)
-      poseAndRender(px, 0.9, pz, baseYaw, -0.02);
-      for (let i = 0; i < 16; i++) {
-        const yaw = baseYaw + (Math.random() - 0.5) * 0.26;
-        const pitch = -0.02 + (Math.random() - 0.5) * 0.16;
-        poseAndRender(px, 0.9, pz, yaw, pitch);
-        weapon.fireOnce();
+    // Survey the arena and the bots.
+    overview: () => {
+      player.setPose(14, 0.9, 13, yawToward(-1, -1), -0.12);
+      player.updateCamera(1, 0, 0);
+    },
+    // Aim at the nearest bot and put a lethal burst into it (toppling body + blood + decals).
+    combat: () => {
+      const from = new THREE.Vector3(2, 0.9, 6);
+      player.setPose(from.x, from.y, from.z, Math.PI, 0);
+      player.eye(_qaEye);
+      if (enemies.nearestAlive(_qaEye, _qaTmp)) {
+        for (let i = 0; i < 6; i++) {
+          aimAt(from, _qaTmp);
+          weapon.fireOnce();
+        }
+        aimAt(from, _qaTmp); // settle aim on the target for the shot
       }
-      poseAndRender(px, 0.9, pz, baseYaw, -0.02);
     },
   },
 });

@@ -8,6 +8,7 @@ import * as THREE from 'three/webgpu';
 import { RAPIER } from '../physics/world';
 import type RAPIER_NS from '@dimforge/rapier3d-compat';
 import { DecalPool } from './decals';
+import { createRifle } from './rifle';
 import type { Tracers } from '../vfx/tracers';
 import type { HitRegistry } from '../combat/hittable';
 import type { Sfx } from '../audio/audio';
@@ -69,7 +70,15 @@ export class RaycastWeapon {
   private readonly muzzleLight: THREE.PointLight;
   private flashTimer = 0;
   private kick = 0;
-  private readonly baseVmPos = new THREE.Vector3(0.17, -0.16, -0.62);
+  private ads = 0; // 0 hip … 1 aimed
+  private readonly hipPos = new THREE.Vector3(0.17, -0.17, -0.42);
+  private readonly adsPos = new THREE.Vector3(0.0, -0.058, -0.2);
+  private readonly _vmPos = new THREE.Vector3();
+
+  /** 0 (hip) … 1 (fully aimed) — the camera reads this to zoom FOV. */
+  get adsFactor(): number {
+    return this.ads;
+  }
 
   // scratch
   private readonly _origin = new THREE.Vector3();
@@ -107,25 +116,12 @@ export class RaycastWeapon {
   }
 
   private buildViewmodel(): void {
-    const gunMat = new THREE.MeshStandardMaterial({ color: 0x565d66, roughness: 0.5, metalness: 0.55 });
-    const accent = new THREE.MeshStandardMaterial({ color: 0x34383f, roughness: 0.4, metalness: 0.7 });
+    const rifle = createRifle();
+    this.viewmodel.add(rifle.group);
+    this.viewmodel.scale.setScalar(0.9);
+    this.viewmodel.position.copy(this.hipPos);
 
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.11, 0.4), gunMat);
-    const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.32), accent);
-    barrel.position.set(0, 0.02, -0.34);
-    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.16, 0.08), accent);
-    grip.position.set(0, -0.11, 0.08);
-    grip.rotation.x = 0.25;
-    const mag = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.16, 0.09), accent);
-    mag.position.set(0, -0.12, -0.05);
-    const sight = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.04, 0.1), accent);
-    sight.position.set(0, 0.08, -0.05);
-
-    this.viewmodel.add(body, barrel, grip, mag, sight);
-    this.viewmodel.scale.setScalar(0.85);
-    this.viewmodel.position.copy(this.baseVmPos);
-
-    this.muzzle.position.set(0, 0.02, -0.52);
+    this.muzzle.position.copy(rifle.muzzle);
     this.viewmodel.add(this.muzzle);
 
     this.viewmodel.traverse((o) => {
@@ -134,7 +130,13 @@ export class RaycastWeapon {
     });
   }
 
-  update(dt: number, firePressed: number, fireHeld: boolean, reloadHeld: boolean): void {
+  update(
+    dt: number,
+    firePressed: number,
+    fireHeld: boolean,
+    reloadHeld: boolean,
+    aimHeld: boolean,
+  ): void {
     this.cooldown -= dt;
 
     if (reloadHeld && !this.prevReload) this.startReload();
@@ -157,11 +159,19 @@ export class RaycastWeapon {
       }
     }
 
+    // Aim-down-sights: reloading forces hip.
+    const wantAds = aimHeld && this.reloadTimer <= 0;
+    this.ads = THREE.MathUtils.damp(this.ads, wantAds ? 1 : 0, 16, dt);
+
     this.recoil.pitch = THREE.MathUtils.damp(this.recoil.pitch, 0, 9, dt);
     this.recoil.yaw = THREE.MathUtils.damp(this.recoil.yaw, 0, 9, dt);
     this.kick = THREE.MathUtils.damp(this.kick, 0, 14, dt);
-    this.viewmodel.position.z = this.baseVmPos.z + this.kick * 0.05;
-    this.viewmodel.rotation.x = this.kick * 0.18;
+
+    // Viewmodel pose = lerp(hip, ads) + recoil kick back along Z.
+    this._vmPos.lerpVectors(this.hipPos, this.adsPos, this.ads);
+    this._vmPos.z += this.kick * 0.05 * (1 - 0.6 * this.ads);
+    this.viewmodel.position.copy(this._vmPos);
+    this.viewmodel.rotation.x = this.kick * 0.18 * (1 - 0.5 * this.ads);
 
     if (this.flashTimer > 0) {
       this.flashTimer -= dt;
@@ -240,8 +250,9 @@ export class RaycastWeapon {
     this.flashTimer = 0.04;
     this.muzzleLight.intensity = 7;
 
-    this.recoil.pitch += 0.016;
-    this.recoil.yaw += (Math.random() - 0.5) * 0.008;
+    const steady = 1 - 0.4 * this.ads;
+    this.recoil.pitch += 0.016 * steady;
+    this.recoil.yaw += (Math.random() - 0.5) * 0.008 * steady;
     this.kick = Math.min(1, this.kick + 0.7);
   }
 }

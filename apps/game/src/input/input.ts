@@ -13,6 +13,8 @@ export interface FrameInput {
   /** Fire events (mousedown) that occurred since the last drain. */
   firePressed: number;
   fireHeld: boolean;
+  /** Right mouse held (aim-down-sights). */
+  aimHeld: boolean;
 }
 
 export class Input {
@@ -21,6 +23,7 @@ export class Input {
   private lookY = 0;
   private firePressed = 0;
   private fireHeld = false;
+  private aimHeld = false;
   private locked = false;
 
   constructor(canvas: HTMLElement) {
@@ -40,17 +43,22 @@ export class Input {
       if (e.button === 0) {
         this.firePressed += 1;
         this.fireHeld = true;
+      } else if (e.button === 2) {
+        this.aimHeld = true;
       }
     });
     window.addEventListener('mouseup', (e) => {
       if (e.button === 0) this.fireHeld = false;
+      else if (e.button === 2) this.aimHeld = false;
     });
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
     document.addEventListener('pointerlockchange', () => {
       this.locked = document.pointerLockElement === canvas;
       if (!this.locked) {
         this.keys.clear();
         this.fireHeld = false;
+        this.aimHeld = false;
       }
     });
     document.addEventListener('mousemove', (e) => {
@@ -75,6 +83,7 @@ export class Input {
       lookY: this.lookY,
       firePressed: this.firePressed,
       fireHeld: this.fireHeld,
+      aimHeld: this.aimHeld,
     };
     this.lookX = 0;
     this.lookY = 0;

@@ -4,6 +4,7 @@
  */
 import * as THREE from 'three/webgpu';
 import { Enemy, type EnemyDeps } from './enemy';
+import type { Archetype } from './archetypes';
 
 export class EnemyManager {
   private readonly enemies: Enemy[] = [];
@@ -11,17 +12,13 @@ export class EnemyManager {
 
   constructor(private readonly deps: EnemyDeps) {}
 
-  spawn(at: THREE.Vector3): Enemy | null {
+  spawn(at: THREE.Vector3, arch: Archetype): Enemy {
     const p = this.deps.nav.closestPoint(at) ?? at.clone();
     // Lift to capsule-centre height (feet on the navmesh surface).
     p.y += 0.9;
-    const e = new Enemy(this.deps, p);
+    const e = new Enemy(this.deps, p, arch);
     this.enemies.push(e);
     return e;
-  }
-
-  spawnMany(points: THREE.Vector3[]): void {
-    for (const p of points) this.spawn(p);
   }
 
   integrate(dt: number): void {

@@ -14,7 +14,8 @@ import type { Navigation } from './navmesh';
 import type { HitRegistry, Hittable } from '../combat/hittable';
 import type { Tracers } from '../vfx/tracers';
 import type { Sfx } from '../audio/audio';
-import { CharacterInstance, type AnimState } from './character';
+import { Soldier, type AnimState } from './soldier';
+import type { Archetype } from './archetypes';
 
 export interface PlayerTarget {
   eye(out: THREE.Vector3): THREE.Vector3;
@@ -35,17 +36,10 @@ export interface EnemyDeps {
 
 const RADIUS = 0.35;
 const CYL_HALF = 0.55; // total capsule ≈ 1.8 m
-const MAX_HP = 100;
 
-const VIEW_DIST = 40;
+const VIEW_DIST = 42;
 const FOV_COS = Math.cos((100 * Math.PI) / 180 / 2); // 100° cone
-const HEAR_DIST = 24;
-const FIRE_RANGE = 34;
-const REACTION = 0.34; // s before first shot
-const FIRE_INTERVAL = 0.5;
-const ENEMY_DAMAGE = 9;
-const PATROL_SPEED = 2.2;
-const ENGAGE_SPEED = 4.6;
+const HEAR_DIST = 26;
 const GRAVITY = 24;
 
 type State = 'patrol' | 'alert' | 'engage' | 'search' | 'dead';
@@ -60,7 +54,6 @@ export class Enemy implements Hittable {
   private readonly prevPos = new THREE.Vector3();
   private readonly vel = new THREE.Vector3();
   private yaw = 0;
-  private hp = MAX_HP;
   private state: State = 'patrol';
 
   private readonly path: THREE.Vector3[] = [];
@@ -75,8 +68,9 @@ export class Enemy implements Hittable {
 
   private readonly muzzleFlash: THREE.Mesh;
   private flashTimer = 0;
-  private readonly character = new CharacterInstance();
+  private readonly character: Soldier;
   private animState: AnimState = 'idle';
+  private hp: number;
 
   // scratch
   private readonly _eye = new THREE.Vector3();
@@ -91,10 +85,13 @@ export class Enemy implements Hittable {
   constructor(
     private readonly deps: EnemyDeps,
     spawn: THREE.Vector3,
+    private readonly arch: Archetype,
   ) {
     this.pos.copy(spawn);
     this.prevPos.copy(spawn);
+    this.hp = arch.maxHp;
 
+    this.character = new Soldier(arch.soldier);
     this.group.add(this.character.root);
     deps.scene.add(this.group);
 
@@ -122,10 +119,9 @@ export class Enemy implements Hittable {
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
-    this.muzzleFlash = new THREE.Mesh(new THREE.PlaneGeometry(0.25, 0.25), flashMat);
+    this.muzzleFlash = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.22), flashMat);
     this.muzzleFlash.visible = false;
-    this.muzzleFlash.position.set(0.18, 0.15, -0.5);
-    this.group.add(this.muzzleFlash);
+    this.character.muzzleAnchor.add(this.muzzleFlash); // at the rifle muzzle
   }
 
   get alive(): boolean {
@@ -174,7 +170,7 @@ export class Enemy implements Hittable {
 
   private toAlert(): void {
     this.state = 'alert';
-    this.reactionTimer = REACTION;
+    this.reactionTimer = this.arch.reaction;
     this.path.length = 0;
   }
 
@@ -259,7 +255,7 @@ export class Enemy implements Hittable {
       else this.waitTimer = 1;
       return;
     }
-    this.steerAlongPath(PATROL_SPEED);
+    this.steerAlongPath(this.arch.patrolSpeed);
   }
 
   private tickAlert(dt: number, sees: boolean): void {
@@ -276,13 +272,13 @@ export class Enemy implements Hittable {
       this.deps.player.eye(this.lastKnown);
       this.faceToward(this.lastKnown);
       const dist = this.pos.distanceTo(this.lastKnown);
-      if (dist <= FIRE_RANGE) {
+      if (dist <= this.arch.fireRange) {
         // Hold position and fire.
         this.vel.x = 0;
         this.vel.z = 0;
         if (this.fireTimer <= 0) {
           this.shoot();
-          this.fireTimer = FIRE_INTERVAL * (0.8 + Math.random() * 0.4);
+          this.fireTimer = this.arch.fireInterval * (0.8 + Math.random() * 0.4);
         }
       } else {
         this.advanceTo(this.lastKnown);
@@ -307,7 +303,7 @@ export class Enemy implements Hittable {
       this.pathIndex = 0;
       return;
     }
-    this.steerAlongPath(ENGAGE_SPEED);
+    this.steerAlongPath(this.arch.engageSpeed);
     if (this.path.length) this.faceToward(this.path[Math.min(this.pathIndex, this.path.length - 1)]);
   }
 
@@ -320,7 +316,7 @@ export class Enemy implements Hittable {
       this.setPath(target);
       this.repathTimer = 0.5;
     }
-    this.steerAlongPath(ENGAGE_SPEED);
+    this.steerAlongPath(this.arch.engageSpeed);
   }
 
   private setPath(target: THREE.Vector3): void {
@@ -377,24 +373,24 @@ export class Enemy implements Hittable {
     this.deps.player.eye(this._pEye);
     this._aim.copy(this._pEye);
     const dist = this._eye.distanceTo(this._pEye);
-    const spread = 0.03 * dist; // grows with range → fairer at distance
+    const spread = this.arch.spread * dist; // grows with range → fairer at distance
     this._aim.x += (Math.random() - 0.5) * spread;
     this._aim.y += (Math.random() - 0.5) * spread;
     this._aim.z += (Math.random() - 0.5) * spread;
     this._toPlayer.subVectors(this._aim, this._eye).normalize();
 
     const ray = new RAPIER.Ray(this._eye, this._toPlayer);
-    const hit = this.deps.world.castRay(ray, FIRE_RANGE, true, undefined, undefined, this.collider);
+    const hit = this.deps.world.castRay(ray, this.arch.fireRange, true, undefined, undefined, this.collider);
     if (hit) {
       this._end.copy(this._eye).addScaledVector(this._toPlayer, hit.timeOfImpact);
       if (hit.collider.handle === this.deps.player.colliderHandle) {
-        this.deps.player.applyDamage(ENEMY_DAMAGE, this.pos);
+        this.deps.player.applyDamage(this.arch.damage, this.pos);
       }
     } else {
-      this._end.copy(this._eye).addScaledVector(this._toPlayer, FIRE_RANGE);
+      this._end.copy(this._eye).addScaledVector(this._toPlayer, this.arch.fireRange);
     }
 
-    this.group.localToWorld(this._muzzle.copy(this.muzzleFlash.position));
+    this.character.muzzleAnchor.getWorldPosition(this._muzzle);
     this.deps.tracers.spawn(this._muzzle, this._end);
     this.deps.sfx.gunshot(this._muzzle);
     this.muzzleFlash.visible = true;

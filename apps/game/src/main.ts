@@ -26,7 +26,7 @@ import { HitRegistry } from './combat/hittable';
 import { Tracers } from './vfx/tracers';
 import { ParticleBursts } from './vfx/particles';
 import { EnemyManager } from './ai/enemies';
-import { loadCharacterTemplate } from './ai/character';
+import { RIFLEMAN, RUSHER, HEAVY, scaleArchetype } from './ai/archetypes';
 import { AudioEngine } from './audio/audio';
 
 const STEP_HZ = 60;
@@ -70,8 +70,8 @@ sun.shadow.bias = -0.0004;
 sun.shadow.normalBias = 0.03;
 scene.add(sun);
 
-// --- World + navmesh + enemy character template ---
-const [levelMats] = await Promise.all([loadLevelMaterials(), loadCharacterTemplate()]);
+// --- World + navmesh ---
+const levelMats = await loadLevelMaterials();
 const collideMeshes = buildGreybox(scene, physics.world, levelMats);
 const nav = new Navigation(collideMeshes);
 
@@ -121,13 +121,16 @@ const enemies = new EnemyManager({
   player,
   sfx: audio,
 });
-enemies.spawnMany([
-  new THREE.Vector3(-14, 1, -11),
-  new THREE.Vector3(12, 1, -12),
-  new THREE.Vector3(-5, 1, -3),
-  new THREE.Vector3(9, 1, 5),
-]);
-const totalEnemies = 4;
+const DIFFICULTY = 1; // 0 easy … 2 hard (wired to settings later)
+const roster: [THREE.Vector3, typeof RIFLEMAN][] = [
+  [new THREE.Vector3(-14, 1, -11), RIFLEMAN],
+  [new THREE.Vector3(12, 1, -12), HEAVY],
+  [new THREE.Vector3(-5, 1, -3), RUSHER],
+  [new THREE.Vector3(9, 1, 5), RIFLEMAN],
+  [new THREE.Vector3(-16, 1, -12), RUSHER],
+];
+for (const [pos, arch] of roster) enemies.spawn(pos, scaleArchetype(arch, DIFFICULTY));
+const totalEnemies = roster.length;
 
 // --- Death / respawn + objective ---
 let respawnIn = 0;
@@ -157,7 +160,14 @@ const loop = createFixedLoop(STEP_HZ, {
       alive ? fi.firePressed : 0,
       alive && fi.fireHeld,
       alive && input.isDown('KeyR'),
+      alive && fi.aimHeld,
     );
+    // ADS zooms the camera FOV.
+    const wantFov = 70 - 18 * weapon.adsFactor;
+    if (Math.abs(camera.fov - wantFov) > 0.05) {
+      camera.fov = wantFov;
+      camera.updateProjectionMatrix();
+    }
     if (alive && fi.firePressed > 0) {
       player.eye(_qaTmp);
       enemies.broadcastGunfire(_qaTmp);

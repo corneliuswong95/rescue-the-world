@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(BASE_URL=\"http://127.0.0.1:4173/?webgl=1\" LABEL=M4 pnpm run shoot)"
+    ]
+  }
+}

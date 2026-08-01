@@ -10,6 +10,7 @@ import * as THREE from 'three/webgpu';
 import { pass, mrt, output, normalView, vec3, vec4 } from 'three/tsl';
 import { ao } from 'three/examples/jsm/tsl/display/GTAONode.js';
 import { bloom } from 'three/examples/jsm/tsl/display/BloomNode.js';
+import { fxaa } from 'three/examples/jsm/tsl/display/FXAANode.js';
 
 export interface Post {
   render: () => void;
@@ -36,7 +37,8 @@ export function createPost(
 
   // Threshold bloom — only genuinely bright pixels glow.
   const bloomPass = bloom(lit, 0.35, 0.5, 0.9);
-  post.outputNode = lit.add(bloomPass);
+  // FXAA as the final step (the offscreen pipeline bypasses MSAA).
+  post.outputNode = fxaa(lit.add(bloomPass));
 
   return {
     render: () => post.render(),

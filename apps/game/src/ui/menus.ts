@@ -144,7 +144,7 @@ export function createMenus(initial: Settings): Menus {
   // --- builders ---
   function panel(): HTMLElement {
     const p = div(
-      `${PANEL};display:none;padding:34px 40px;min-width:340px;text-align:center;
+      `${PANEL};display:none;padding:34px 42px;min-width:420px;text-align:center;
        box-shadow:0 20px 60px rgba(0,0,0,.5)`,
     );
     return p;
@@ -163,7 +163,7 @@ export function createMenus(initial: Settings): Menus {
     return t;
   }
   function hint(text: string): HTMLElement {
-    const t = div('color:#8a93a0;font-size:11px;margin-top:18px;max-width:360px;line-height:1.5');
+    const t = div('color:#8a93a0;font-size:11px;margin-top:18px;max-width:440px;line-height:1.6');
     t.textContent = text;
     return t;
   }

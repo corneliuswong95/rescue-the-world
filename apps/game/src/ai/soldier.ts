@@ -113,10 +113,13 @@ export class Soldier {
       this.deathT = Math.min(1, this.deathT + dt / 0.7);
       const t = this.deathT;
       const e = t * t * (3 - 2 * t); // smoothstep
-      this.model.rotation.x = -e * 1.52; // topple onto the back
-      this.model.position.y = -0.9 - e * 0.15;
-      this.kneeL.rotation.x = e * 0.9;
-      this.kneeR.rotation.x = e * 0.6;
+      // Crumple forward and to the side — reads as a collapse, not a stiff fall.
+      this.model.rotation.x = e * 1.45;
+      this.model.rotation.z = e * 0.35;
+      this.model.position.y = -0.9 - e * 0.12;
+      this.torso.rotation.x = 0.2 + e * 0.5; // slump the upper body
+      this.kneeL.rotation.x = e * 1.2;
+      this.kneeR.rotation.x = e * 0.8;
       return;
     }
 

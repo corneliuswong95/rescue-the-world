@@ -80,6 +80,11 @@ export class RaycastWeapon {
     return this.ads;
   }
 
+  /** Hide the viewmodel outside of play (so it doesn't intrude on menus). */
+  setVisible(visible: boolean): void {
+    this.viewmodel.visible = visible;
+  }
+
   // scratch
   private readonly _origin = new THREE.Vector3();
   private readonly _dir = new THREE.Vector3();
@@ -111,6 +116,11 @@ export class RaycastWeapon {
 
     this.muzzleLight = new THREE.PointLight(0xffcf8a, 0, 9, 2);
     this.muzzle.add(this.muzzleLight);
+
+    // Dim, short-range fill so the viewmodel always reads (standard FP treatment).
+    const fill = new THREE.PointLight(0xdfeaff, 0.9, 1.8, 2.4);
+    fill.position.set(0.1, 0.15, -0.15);
+    this.camera.add(fill);
 
     this.hooks.onAmmo(this.mag, this.reserve, false);
   }

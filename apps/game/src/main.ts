@@ -55,20 +55,21 @@ window.addEventListener('resize', () => {
 // gentle; the sun stays as the shadow-casting key.
 await setupEnvironment(renderer, scene);
 
-const hemi = new THREE.HemisphereLight(0xcfe0ff, 0x3a352c, 0.1);
+const hemi = new THREE.HemisphereLight(0xcfe0ff, 0x3a352c, 0.08);
 scene.add(hemi);
-const sun = new THREE.DirectionalLight(0xfff2e0, 1.7);
-sun.position.set(12, 18, 8);
+const sun = new THREE.DirectionalLight(0xfff2e0, 2.7); // strong key → defined cast shadows
+sun.position.set(14, 20, 9);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.camera.near = 1;
-sun.shadow.camera.far = 60;
+sun.shadow.camera.far = 70;
 sun.shadow.camera.left = -28;
 sun.shadow.camera.right = 28;
 sun.shadow.camera.top = 28;
 sun.shadow.camera.bottom = -28;
 sun.shadow.bias = -0.0004;
 sun.shadow.normalBias = 0.03;
+sun.shadow.intensity = 1.0;
 scene.add(sun);
 
 // --- World + navmesh ---
@@ -296,6 +297,7 @@ const loop = createFixedLoop(STEP_HZ, {
     if (playing && enemies.aliveCount() === 0) win();
 
     hud.setVisible(playing);
+    weapon.setVisible(playing);
     hud.setHealth(player.health, 100);
     hud.setObjective(`ELIMINATE HOSTILES — ${enemies.aliveCount()} / ${totalEnemies}`);
 

@@ -98,9 +98,23 @@ export function buildGreybox(
   add({ size: [1, H, 1], pos: [-10, H / 2, 8], material: MAT.pillar });
   add({ size: [1, H, 1], pos: [12, H / 2, -12], material: MAT.pillar });
 
-  // Ramp up to a raised platform.
+  // Ramp up to a raised platform (west).
   add({ size: [5, 0.4, 4], pos: [-13, 0.9, -8], rotX: -0.32, material: MAT.crate });
   add({ size: [7, 0.4, 7], pos: [-16, 1.75, -12], material: MAT.wall });
+
+  // Central cover — an L of chest-high walls to break up the open middle.
+  add({ size: [0.6, 1.5, 6], pos: [1, 0.75, -4], material: MAT.wall });
+  add({ size: [5, 1.5, 0.6], pos: [3.5, 0.75, -7], material: MAT.wall });
+  add({ size: [1.2, 1.2, 1.2], pos: [-1, 0.6, -6], material: MAT.crate });
+  add({ size: [1.2, 1.2, 1.2], pos: [0.2, 1.8, -6.5], material: MAT.crate });
+
+  // East ramp + raised platform (a second vantage).
+  add({ size: [4, 0.4, 4], pos: [13, 0.7, 5], rotX: -0.3, material: MAT.crate });
+  add({ size: [6, 0.4, 6], pos: [16, 1.4, 5], material: MAT.wall });
+
+  // A couple more scattered crates for flanking cover.
+  add({ size: [1.4, 1.4, 1.4], pos: [6, 0.7, -14], material: MAT.crate });
+  add({ size: [1.4, 1.4, 1.4], pos: [-9, 0.7, 2], material: MAT.accent });
 
   return collide;
 }

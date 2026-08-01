@@ -18,9 +18,9 @@ export async function setupEnvironment(
   const pmrem = new THREE.PMREMGenerator(renderer);
   const env = pmrem.fromEquirectangular(hdr);
   scene.environment = env.texture;
-  scene.environmentIntensity = 0.5;
+  scene.environmentIntensity = 0.38; // lower ambient fill → stronger cast shadows / contrast
 
   scene.background = hdr;
-  scene.backgroundIntensity = 0.35; // dim the bright sky so the room reads
+  scene.backgroundIntensity = 0.32; // dim the bright sky so the room reads
   scene.backgroundBlurriness = 0.0;
 }

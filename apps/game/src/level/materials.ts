@@ -44,7 +44,7 @@ export async function loadLevelMaterials(): Promise<LevelMaterials> {
   // Tint the light concrete down to a cooler, less-blown industrial grey (colour multiplies map).
   const floor = new THREE.MeshStandardMaterial({ ...floorTex, color: 0x8a8f96, roughness: 1, metalness: 0 });
   const wall = new THREE.MeshStandardMaterial({ ...wallTex, color: 0x9aa0a8, roughness: 1, metalness: 0 });
-  const crate = new THREE.MeshStandardMaterial({ ...crateTex, color: 0xcaa878, roughness: 1, metalness: 0 });
+  const crate = new THREE.MeshStandardMaterial({ ...crateTex, color: 0xd8c8ad, roughness: 1, metalness: 0 });
 
   // Accent + pillar keep distinct solid colours but borrow surface relief for detail.
   const accent = new THREE.MeshStandardMaterial({

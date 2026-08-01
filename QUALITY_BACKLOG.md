@@ -3,6 +3,15 @@
 Visual/perf issues the `critic` flagged that were deferred after the 3-cycle cap for a
 milestone. Revisit before v1 sign-off.
 
+## M4 critic gate — outcome (3 cycles, terminated)
+
+Rubric mean progressed **2.7 → 3.3 → 3.5** over three critic→fix cycles. Perf budgets green on
+all four QA states (draw calls ≤223 / ≤500; triangles ≤6.9k / ≪2–3M), jank checklist clean of
+blocking issues (menu-clip, floating props, z-fighting all fixed). Must-have mean (~3.1) is below
+the ≥4 PASS bar — held down by animation and environment art, which are **scope, not defects**.
+Per PLAN §7's hard 3-cycle cap: **backlog residuals and ship.** Ranked residuals below; #1 is the
+highest-leverage next task.
+
 | Milestone | Screenshot | Issue | Suggested fix | Status |
 |---|---|---|---|---|
 | M1 | qa/shots/M1/default.png | Viewmodel renders in the world scene at the 70° world FOV — clips world geometry near walls and distorts at frame edges. | Move the viewmodel to a dedicated overlay scene + narrow-FOV (~55°) camera with a depth clear between passes (PLAN §4 "separate FOV layer"). Owned by the Weapons subsystem. | Deferred |
@@ -20,6 +29,9 @@ milestone. Revisit before v1 sign-off.
 | M4 | — | Combat VFX (muzzle flash, tracers, blood) are transient and don't appear in the 400 ms-settle QA stills, so the critic can't score them. | Add a QA-only "freeze VFX" hook, or capture mid-effect, so the critic sees muzzle/tracer/impact. | Deferred |
 | M4 | qa/shots/M4/overview.png | AA is FXAA (post) — softens edges but blurs slightly; no temporal stability. | Evaluate TAA or MSAA sample count on the scene pass for the WebGPU path. | Deferred |
 | M4 | qa/shots/M4/overview.png | Walls read plainer than the floor (plaster texture is subtle at this tiling). | Retune wall tiling / add trim + edge detail; per-face world-scaled UVs (see M3 UV row). | Deferred |
+| M4 | qa/shots/M4/overview.png · combat.png | **[Critic #1 — schedule first]** Environment/material art pass — arena still reads as a well-lit greybox; flat walls + plain crates keep visual cohesion at ~3/5. | Modular art kit + trim, distinct wall/floor/prop materials, set dressing; the single biggest lift to visual cohesion. | Deferred |
+| M4 | (all gameplay) | Sky/IBL inconsistency between shots (blue vs overcast) reads as art-direction drift. | Lock one HDRI/time-of-day per level; match sky to IBL. Cheap. | Deferred |
+| M4 | qa/shots/M4/firefight.png | Muzzle flash slightly over-bloomed; blood burst reads as a floating disc (not surface-oriented). | Lower bloom on the flash; orient the blood particle/decal to the hit-surface normal. | Deferred |
 | M3 | qa/shots/M3/overview.png | Enemy character is three's CC0 "RobotExpressive" placeholder (a robot, not a soldier) — user wanted a Quaternius soldier, but no scriptable Quaternius download was available here. | Drop in a Quaternius CC0 soldier `.glb` (same Idle/Running/Death clip roles → near drop-in via `ai/character.ts`). Needs a reliable download or user-provided file. | Blocked on asset |
 | M3 | — | Player weapon is still the procedural box viewmodel — no CC0 gun model was auto-fetchable. | Integrate a CC0 rifle glTF on a separate-FOV viewmodel layer (also fixes the M1 world-clip row). | Blocked on asset |
 | M3 | — | glTF/texture assets ship uncompressed (small M3 set, measured well under the 1.5 GB GPU-memory budget). Rule 8 wants KTX2/Draco/meshopt before scale. | Add a `gltf-transform` step (Draco + meshopt + KTX2) once the asset set grows in M4. | Deferred |

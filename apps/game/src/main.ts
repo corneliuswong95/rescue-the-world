@@ -100,8 +100,13 @@ const weapon = new RaycastWeapon(camera, physics.world, decals, player.collider,
   sfx: audio,
   impactFx: (point, dir, flesh) => {
     _fxDir.copy(dir).multiplyScalar(-1);
-    if (flesh) particles.burst(point, _fxDir, 12, 0x7a1216, 3.5, 1.1, 0.5);
-    else particles.burst(point, _fxDir, 6, 0xb6a888, 2.4, 1.5, 0.28);
+    if (flesh) {
+      particles.burst(point, _fxDir, 14, 0x8a1418, 3.5, 1.1, 0.5); // blood
+      particles.burst(point, _fxDir, 6, 0xff5a3c, 5.5, 1.6, 0.2); // bright hit sparks
+    } else {
+      particles.burst(point, _fxDir, 7, 0xb6a888, 2.6, 1.4, 0.3); // dust
+      particles.burst(point, _fxDir, 5, 0xffd27a, 5.0, 1.7, 0.16); // sparks
+    }
   },
   onHitmarker: (headshot, killed) => {
     hud.hitmarker(headshot, killed);
@@ -150,6 +155,7 @@ const menus = createMenus(settings);
 type GameState = 'menu' | 'playing' | 'paused' | 'won' | 'lost';
 let gameState: GameState = 'menu';
 let missionTime = 0;
+let qaFreeze = false; // QA-only: freeze sim + VFX decay so transient effects persist into a capture
 
 function lockPointer(): void {
   try {
@@ -165,6 +171,7 @@ function startGame(): void {
   spawnEnemies();
   player.respawn(spawn);
   missionTime = 0;
+  qaFreeze = false;
   gameState = 'playing';
   hud.setMessage(null);
   menus.hideAll();
@@ -251,7 +258,7 @@ const _up = new THREE.Vector3();
 const _pos = new THREE.Vector3();
 const loop = createFixedLoop(STEP_HZ, {
   update: (dt) => {
-    if (gameState !== 'playing') return;
+    if (gameState !== 'playing' || qaFreeze) return;
     missionTime += dt;
     player.integrate(dt);
     enemies.integrate(dt);
@@ -261,23 +268,24 @@ const loop = createFixedLoop(STEP_HZ, {
   render: (alpha, frameMs) => {
     const dt = frameMs / 1000;
     const playing = gameState === 'playing';
-    const fx = playing ? dt : 0;
+    const active = playing && !qaFreeze; // frozen: keep rendering, stop advancing sim + VFX
+    const fx = active ? dt : 0;
     const fi = input.drain();
 
-    if (input.isLocked && playing) player.applyLook(fi.lookX, fi.lookY);
+    if (input.isLocked && active) player.applyLook(fi.lookX, fi.lookY);
     weapon.update(
-      dt,
-      playing ? fi.firePressed : 0,
-      playing && fi.fireHeld,
-      playing && input.isDown('KeyR'),
-      playing && fi.aimHeld,
+      fx,
+      active ? fi.firePressed : 0,
+      active && fi.fireHeld,
+      active && input.isDown('KeyR'),
+      active && fi.aimHeld,
     );
     const wantFov = 70 - 18 * weapon.adsFactor;
     if (Math.abs(camera.fov - wantFov) > 0.05) {
       camera.fov = wantFov;
       camera.updateProjectionMatrix();
     }
-    if (playing && fi.firePressed > 0) {
+    if (active && fi.firePressed > 0) {
       player.eye(_pos);
       enemies.broadcastGunfire(_pos);
     }
@@ -287,14 +295,14 @@ const loop = createFixedLoop(STEP_HZ, {
     playerTracers.update(fx);
     enemyTracers.update(fx);
     particles.update(fx);
-    hud.update(dt);
+    hud.update(fx);
 
     camera.getWorldDirection(_fwd);
     _up.set(0, 1, 0).applyQuaternion(camera.quaternion);
     player.eye(_pos);
     audio.setListener(_pos, _fwd, _up);
 
-    if (playing && enemies.aliveCount() === 0) win();
+    if (active && enemies.aliveCount() === 0) win();
 
     hud.setVisible(playing);
     weapon.setVisible(playing);
@@ -345,6 +353,23 @@ installQaHooks({
         }
         aimAt(from, _qaTmp);
       }
+    },
+    // Freeze-frame the instant of firing so the (real, but transient) muzzle flash, tracer,
+    // impact blood and hitmarker persist into the capture for the critic to judge.
+    firefight: () => {
+      startGame();
+      const from = new THREE.Vector3(3, 0.9, 3);
+      player.setPose(from.x, from.y, from.z, Math.PI, 0);
+      player.eye(_qaEye);
+      if (enemies.nearestAlive(_qaEye, _qaTmp)) {
+        for (let i = 0; i < 3; i++) {
+          aimAt(from, _qaTmp);
+          weapon.fireOnce();
+        }
+        aimAt(from, _qaTmp);
+        weapon.fireOnce(); // final shot: fresh flash / tracer / blood / hitmarker
+      }
+      qaFreeze = true;
     },
   },
 });

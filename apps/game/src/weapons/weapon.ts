@@ -109,7 +109,7 @@ export class RaycastWeapon {
       depthWrite: false,
       depthTest: false,
     });
-    this.muzzleFlash = new THREE.Mesh(new THREE.PlaneGeometry(0.35, 0.35), flashMat);
+    this.muzzleFlash = new THREE.Mesh(new THREE.PlaneGeometry(0.55, 0.55), flashMat);
     this.muzzleFlash.visible = false;
     this.muzzleFlash.renderOrder = 4;
     this.muzzle.add(this.muzzleFlash);
@@ -256,9 +256,9 @@ export class RaycastWeapon {
 
     this.muzzleFlash.visible = true;
     this.muzzleFlash.rotation.z = Math.random() * Math.PI;
-    this.muzzleFlash.scale.setScalar(0.8 + Math.random() * 0.5);
-    this.flashTimer = 0.04;
-    this.muzzleLight.intensity = 7;
+    this.muzzleFlash.scale.setScalar(1.0 + Math.random() * 0.6);
+    this.flashTimer = 0.055;
+    this.muzzleLight.intensity = 10;
 
     const steady = 1 - 0.4 * this.ads;
     this.recoil.pitch += 0.016 * steady;

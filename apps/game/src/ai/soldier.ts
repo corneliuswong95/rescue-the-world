@@ -7,6 +7,7 @@
  */
 import * as THREE from 'three/webgpu';
 import { createRifle } from '../weapons/rifle';
+import { mergeStaticByMaterial } from '../engine/merge';
 
 export type AnimState = 'idle' | 'run' | 'dead';
 
@@ -86,6 +87,7 @@ export class Soldier {
     rifle.group.position.set(0.02, 0.16, -0.14);
     this.muzzleAnchor.position.copy(rifle.muzzle);
     rifle.group.add(this.muzzleAnchor);
+    mergeStaticByMaterial(this.torso); // ~13 body parts → ~5 draws; rifle group left intact
     this.torso.add(rifle.group);
 
     this.model.add(this.torso);

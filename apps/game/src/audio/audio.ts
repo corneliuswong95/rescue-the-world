@@ -177,4 +177,47 @@ export class AudioEngine implements Sfx {
     this.tone(dest, t, 'sawtooth', 180, 0.35, 0.28);
     this.noiseBurst(dest, t + 0.05, { filter: 'lowpass', freq: 500, q: 0.4, gain: 0.4, decay: 0.35 });
   }
+
+  /** Player footstep (centred, subtle). */
+  footstep(): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    this.noiseBurst(this.sfxBus!, t, { filter: 'lowpass', freq: 380 + Math.random() * 140, q: 0.6, gain: 0.2, decay: 0.08 });
+    this.tone(this.sfxBus!, t, 'sine', 68, 0.1, 0.05);
+  }
+
+  private ambienceOn = false;
+  /** Start the low ambience bed (drone + wind). Idempotent. */
+  startAmbience(): void {
+    if (!this.ctx || this.ambienceOn) return;
+    this.ambienceOn = true;
+    const ctx = this.ctx;
+    const bus = ctx.createGain();
+    bus.gain.value = 0.14;
+    bus.connect(this.master!);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 340;
+    lp.connect(bus);
+    for (const f of [48, 48.3, 72]) {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.value = f;
+      const g = ctx.createGain();
+      g.gain.value = 0.5;
+      o.connect(g).connect(lp);
+      o.start();
+    }
+    const wind = ctx.createBufferSource();
+    wind.buffer = this.noise;
+    wind.loop = true;
+    const wf = ctx.createBiquadFilter();
+    wf.type = 'bandpass';
+    wf.frequency.value = 500;
+    wf.Q.value = 0.4;
+    const wg = ctx.createGain();
+    wg.gain.value = 0.16;
+    wind.connect(wf).connect(wg).connect(bus);
+    wind.start();
+  }
 }

@@ -34,6 +34,10 @@ export class Player {
   onDamaged?: (relAngle: number) => void;
   /** Called once when health reaches zero. */
   onDied?: () => void;
+  /** Called each footstep while grounded and moving. */
+  onFootstep?: () => void;
+
+  private stepAccum = 0;
 
   /** Look-sensitivity multiplier (settings). */
   sensitivity = 1;
@@ -160,6 +164,18 @@ export class Player {
     const hSpeed = Math.hypot(this.vel.x, this.vel.z);
     if (this.grounded) this.bobPhase += hSpeed * dt * 1.1;
     this.bobAmt = damp(this.bobAmt, this.grounded ? Math.min(hSpeed / SPRINT, 1) : 0, 8, dt);
+
+    // Footsteps: emit every stride's worth of grounded distance.
+    if (this.grounded && hSpeed > 0.4) {
+      this.stepAccum += hSpeed * dt;
+      const stride = this.input.isDown('ShiftLeft') ? 2.5 : 1.9;
+      if (this.stepAccum >= stride) {
+        this.stepAccum = 0;
+        this.onFootstep?.();
+      }
+    } else {
+      this.stepAccum = 0;
+    }
   }
 
   /** Hard-place the player + aim (QA harness only). */

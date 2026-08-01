@@ -6,6 +6,7 @@
  * smaller). Returns the group plus the muzzle tip in local space.
  */
 import * as THREE from 'three/webgpu';
+import { mergeStaticByMaterial } from '../engine/merge';
 
 export interface Rifle {
   group: THREE.Group;
@@ -62,5 +63,6 @@ export function createRifle(): Rifle {
   part(g, new THREE.BoxGeometry(0.045, 0.065, 0.17), POLYMER, 0, 0.006, 0.2);
   part(g, new THREE.BoxGeometry(0.02, 0.09, 0.03), POLYMER, 0, -0.02, 0.12);
 
+  mergeStaticByMaterial(g); // ~12 parts → 4 draws (one per material)
   return { group: g, muzzle: new THREE.Vector3(0, 0.012, -0.6) };
 }

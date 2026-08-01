@@ -138,6 +138,7 @@ function spawnEnemies(): void {
 }
 
 player.onDamaged = (rel) => hud.damageFrom(rel);
+player.onFootstep = () => audio.footstep();
 player.onDied = () => {
   if (gameState === 'playing') lose();
 };
@@ -167,6 +168,7 @@ function startGame(): void {
   hud.setMessage(null);
   menus.hideAll();
   audio.resume();
+  audio.startAmbience();
   lockPointer();
 }
 function pauseGame(): void {

@@ -5,7 +5,7 @@
  * lives in the sim; the HUD only renders what it's told (PLAN §4: keep state out of the DOM).
  */
 export interface Hud {
-  setLocked(locked: boolean): void;
+  setVisible(visible: boolean): void;
   setHealth(hp: number, max: number): void;
   setAmmo(mag: number, reserve: number, reloading: boolean): void;
   hitmarker(headshot: boolean, killed: boolean): void;
@@ -16,6 +16,10 @@ export interface Hud {
 }
 
 export function createHud(): Hud {
+  // A single root so the whole HUD can be hidden outside of play.
+  const hudRoot = el('div', 'position:fixed;inset:0;pointer-events:none;z-index:8;display:none');
+  document.body.appendChild(hudRoot);
+
   // Crosshair
   const crosshair = el('div', `position:fixed;left:50%;top:50%;width:16px;height:16px;
     transform:translate(-50%,-50%);pointer-events:none;z-index:9`);
@@ -24,22 +28,14 @@ export function createHud(): Hud {
       border-radius:50%;transform:translate(-50%,-50%);box-shadow:0 0 2px #000"></div>
     ${line('50%', '0', '2px', '5px')}${line('50%', '11px', '2px', '5px')}
     ${line('0', '50%', '5px', '2px')}${line('11px', '50%', '5px', '2px')}`;
-  document.body.appendChild(crosshair);
+  hudRoot.appendChild(crosshair);
 
   // Hitmarker (X of 4 lines), hidden until a hit
   const hitmark = el('div', `position:fixed;left:50%;top:50%;width:28px;height:28px;
     transform:translate(-50%,-50%) rotate(45deg);pointer-events:none;z-index:9;opacity:0`);
   hitmark.innerHTML = mark('#fff');
-  document.body.appendChild(hitmark);
+  hudRoot.appendChild(hitmark);
   let hitTimer = 0;
-
-  // Prompt
-  const prompt = el('div', `position:fixed;left:50%;top:66%;transform:translateX(-50%);z-index:11;
-    font:14px/1.4 ui-sans-serif,system-ui,sans-serif;color:#cfe;text-align:center;
-    background:rgba(0,0,0,.55);padding:10px 16px;border-radius:8px;pointer-events:none`);
-  prompt.textContent =
-    'Click to play — WASD move · Shift sprint · Ctrl crouch · Space jump · R reload · Click to fire';
-  document.body.appendChild(prompt);
 
   // Health (bottom-left)
   const healthWrap = el('div', `position:fixed;left:22px;bottom:22px;z-index:9;pointer-events:none;
@@ -52,30 +48,30 @@ export function createHud(): Hud {
   const healthLabel = el('div', '');
   healthLabel.textContent = 'HEALTH';
   healthWrap.append(healthLabel, healthBarBg);
-  document.body.appendChild(healthWrap);
+  hudRoot.appendChild(healthWrap);
 
   // Ammo (bottom-right)
   const ammo = el('div', `position:fixed;right:24px;bottom:20px;z-index:9;pointer-events:none;
     font:700 15px/1.2 ui-monospace,monospace;color:#eaf2ff;text-align:right;
     text-shadow:0 1px 2px #000`);
-  document.body.appendChild(ammo);
+  hudRoot.appendChild(ammo);
 
   // Objective (top-center)
   const objective = el('div', `position:fixed;left:50%;top:14px;transform:translateX(-50%);z-index:9;
     pointer-events:none;font:600 13px/1 ui-sans-serif,system-ui,sans-serif;color:#ffd9d0;
     letter-spacing:.4px;text-shadow:0 1px 2px #000`);
-  document.body.appendChild(objective);
+  hudRoot.appendChild(objective);
 
   // Center message
   const message = el('div', `position:fixed;left:50%;top:44%;transform:translate(-50%,-50%);z-index:12;
     pointer-events:none;font:700 34px/1.2 ui-sans-serif,system-ui,sans-serif;color:#fff;
     text-align:center;text-shadow:0 2px 10px rgba(0,0,0,.8);opacity:0;transition:opacity .25s`);
-  document.body.appendChild(message);
+  hudRoot.appendChild(message);
 
   // Low-HP vignette
   const vignette = el('div', `position:fixed;inset:0;z-index:8;pointer-events:none;opacity:0;
     box-shadow:inset 0 0 200px 60px rgba(180,20,20,.85);transition:opacity .2s`);
-  document.body.appendChild(vignette);
+  hudRoot.appendChild(vignette);
 
   // Damage direction indicator
   const dmgDir = el('div', `position:fixed;left:50%;top:50%;width:260px;height:260px;z-index:9;
@@ -83,13 +79,12 @@ export function createHud(): Hud {
   dmgDir.innerHTML = `<div style="position:absolute;left:50%;top:0;width:70px;height:26px;
     transform:translateX(-50%);background:radial-gradient(ellipse at bottom,rgba(255,40,40,.9),
     rgba(255,40,40,0));border-radius:50%"></div>`;
-  document.body.appendChild(dmgDir);
+  hudRoot.appendChild(dmgDir);
   let dmgTimer = 0;
 
   return {
-    setLocked(locked) {
-      prompt.style.display = locked ? 'none' : 'block';
-      crosshair.style.opacity = locked ? '1' : '0.35';
+    setVisible(visible) {
+      hudRoot.style.display = visible ? 'block' : 'none';
     },
     setHealth(hp, max) {
       const f = Math.max(0, Math.min(1, hp / max));

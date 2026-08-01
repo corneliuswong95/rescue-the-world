@@ -1,10 +1,9 @@
 /**
- * OPERATOR — M2 "combat core".
+ * OPERATOR — main entry / game controller.
  *
- * Builds on M1's greybox + player + weapon: adds a recast navmesh, enemy bots (perception +
- * FSM + fair fire) that path real geometry and die, damage routed through a hit registry,
- * player health with death/respawn, and a combat HUD (hitmarkers, ammo, damage direction,
- * objective). Still greybox art — the look/audio pass is M3.
+ * Wires the persistent systems (renderer, physics, navmesh, player, weapon, enemies, HUD,
+ * audio, post) and the game lifecycle: menu → playing → paused → won/lost, with settings
+ * (sensitivity/volume/quality/difficulty) and quality tiers that actually change perf.
  */
 import * as THREE from 'three/webgpu';
 import { createRenderer } from './engine/renderer';
@@ -26,8 +25,10 @@ import { HitRegistry } from './combat/hittable';
 import { Tracers } from './vfx/tracers';
 import { ParticleBursts } from './vfx/particles';
 import { EnemyManager } from './ai/enemies';
-import { RIFLEMAN, RUSHER, HEAVY, scaleArchetype } from './ai/archetypes';
+import { RIFLEMAN, RUSHER, HEAVY, scaleArchetype, type Archetype } from './ai/archetypes';
 import { AudioEngine } from './audio/audio';
+import { loadSettings, saveSettings, DIFFICULTY_VALUE, type Settings, type Quality } from './game/settings';
+import { createMenus } from './ui/menus';
 
 const STEP_HZ = 60;
 
@@ -92,9 +93,6 @@ const audio = new AudioEngine();
 renderer.domElement.addEventListener('mousedown', () => audio.resume());
 
 const _fxDir = new THREE.Vector3();
-const _audioFwd = new THREE.Vector3();
-const _audioUp = new THREE.Vector3();
-const _audioPos = new THREE.Vector3();
 const weapon = new RaycastWeapon(camera, physics.world, decals, player.collider, {
   registry,
   tracers: playerTracers,
@@ -121,29 +119,137 @@ const enemies = new EnemyManager({
   player,
   sfx: audio,
 });
-const DIFFICULTY = 1; // 0 easy … 2 hard (wired to settings later)
-const roster: [THREE.Vector3, typeof RIFLEMAN][] = [
+const SPAWNS: [THREE.Vector3, Archetype][] = [
   [new THREE.Vector3(-14, 1, -11), RIFLEMAN],
   [new THREE.Vector3(12, 1, -12), HEAVY],
   [new THREE.Vector3(-5, 1, -3), RUSHER],
   [new THREE.Vector3(9, 1, 5), RIFLEMAN],
   [new THREE.Vector3(-16, 1, -12), RUSHER],
 ];
-for (const [pos, arch] of roster) enemies.spawn(pos, scaleArchetype(arch, DIFFICULTY));
-const totalEnemies = roster.length;
+let totalEnemies = 0;
+function spawnEnemies(): void {
+  enemies.clear();
+  const d = DIFFICULTY_VALUE[settings.difficulty];
+  totalEnemies = 0;
+  for (const [pos, arch] of SPAWNS) {
+    enemies.spawn(pos, scaleArchetype(arch, d));
+    totalEnemies += 1;
+  }
+}
 
-// --- Death / respawn + objective ---
-let respawnIn = 0;
-let cleared = false;
 player.onDamaged = (rel) => hud.damageFrom(rel);
 player.onDied = () => {
-  respawnIn = 2.6;
-  hud.setMessage('YOU DIED');
+  if (gameState === 'playing') lose();
 };
 
+// --- Settings + menus + game state ---
+const settings = loadSettings();
+const menus = createMenus(settings);
+type GameState = 'menu' | 'playing' | 'paused' | 'won' | 'lost';
+let gameState: GameState = 'menu';
+let missionTime = 0;
+
+function lockPointer(): void {
+  try {
+    renderer.domElement.requestPointerLock();
+  } catch {
+    /* headless / not a user gesture */
+  }
+}
+function releasePointer(): void {
+  if (document.pointerLockElement) document.exitPointerLock();
+}
+function startGame(): void {
+  spawnEnemies();
+  player.respawn(spawn);
+  missionTime = 0;
+  gameState = 'playing';
+  hud.setMessage(null);
+  menus.hideAll();
+  audio.resume();
+  lockPointer();
+}
+function pauseGame(): void {
+  if (gameState !== 'playing') return;
+  gameState = 'paused';
+  menus.showPause();
+}
+function resumeGame(): void {
+  if (gameState !== 'paused') return;
+  gameState = 'playing';
+  menus.hideAll();
+  audio.resume();
+  lockPointer();
+}
+function quitToMenu(): void {
+  enemies.clear();
+  gameState = 'menu';
+  menus.showMenu();
+  releasePointer();
+}
+function win(): void {
+  gameState = 'won';
+  menus.showWin(missionTime);
+  releasePointer();
+}
+function lose(): void {
+  gameState = 'lost';
+  menus.showLose();
+  releasePointer();
+}
+
+menus.onStart = startGame;
+menus.onResume = resumeGame;
+menus.onRestart = startGame;
+menus.onQuitToMenu = quitToMenu;
+menus.onSettingsChange = (s) => applySettings(s);
+
+// Esc (or lost focus) while playing → pause.
+document.addEventListener('pointerlockchange', () => {
+  if (gameState === 'playing' && document.pointerLockElement !== renderer.domElement) {
+    pauseGame();
+  }
+});
+
+// --- Quality tiers (actually change perf) ---
+let usePost = true;
+function applyQuality(q: Quality): void {
+  if (q === 'low') {
+    renderer.setPixelRatio(1);
+    sun.castShadow = false;
+    usePost = false;
+  } else {
+    const pr = q === 'high' ? 2 : 1.5;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, pr));
+    sun.castShadow = true;
+    const m = q === 'high' ? 2048 : 1024;
+    sun.shadow.mapSize.set(m, m);
+    if (sun.shadow.map) {
+      sun.shadow.map.dispose();
+      sun.shadow.map = null; // force a rebuild at the new resolution
+    }
+    usePost = true;
+  }
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+function applySettings(s: Settings): void {
+  Object.assign(settings, s);
+  player.sensitivity = s.sensitivity;
+  audio.setMasterVolume(s.volume);
+  applyQuality(s.quality);
+  saveSettings(settings);
+}
+applySettings(settings);
+menus.showMenu();
+
 // --- Loop ---
+const _fwd = new THREE.Vector3();
+const _up = new THREE.Vector3();
+const _pos = new THREE.Vector3();
 const loop = createFixedLoop(STEP_HZ, {
   update: (dt) => {
+    if (gameState !== 'playing') return;
+    missionTime += dt;
     player.integrate(dt);
     enemies.integrate(dt);
     physics.step();
@@ -151,96 +257,80 @@ const loop = createFixedLoop(STEP_HZ, {
   },
   render: (alpha, frameMs) => {
     const dt = frameMs / 1000;
+    const playing = gameState === 'playing';
+    const fx = playing ? dt : 0;
     const fi = input.drain();
-    const alive = player.isAlive();
 
-    if (input.isLocked && alive) player.applyLook(fi.lookX, fi.lookY);
+    if (input.isLocked && playing) player.applyLook(fi.lookX, fi.lookY);
     weapon.update(
       dt,
-      alive ? fi.firePressed : 0,
-      alive && fi.fireHeld,
-      alive && input.isDown('KeyR'),
-      alive && fi.aimHeld,
+      playing ? fi.firePressed : 0,
+      playing && fi.fireHeld,
+      playing && input.isDown('KeyR'),
+      playing && fi.aimHeld,
     );
-    // ADS zooms the camera FOV.
     const wantFov = 70 - 18 * weapon.adsFactor;
     if (Math.abs(camera.fov - wantFov) > 0.05) {
       camera.fov = wantFov;
       camera.updateProjectionMatrix();
     }
-    if (alive && fi.firePressed > 0) {
-      player.eye(_qaTmp);
-      enemies.broadcastGunfire(_qaTmp);
+    if (playing && fi.firePressed > 0) {
+      player.eye(_pos);
+      enemies.broadcastGunfire(_pos);
     }
     player.updateCamera(alpha, weapon.recoil.pitch, weapon.recoil.yaw);
-    enemies.render(alpha, dt);
+    enemies.render(alpha, fx);
 
-    playerTracers.update(dt);
-    enemyTracers.update(dt);
-    particles.update(dt);
+    playerTracers.update(fx);
+    enemyTracers.update(fx);
+    particles.update(fx);
     hud.update(dt);
 
-    // Audio listener follows the camera.
-    camera.getWorldDirection(_audioFwd);
-    _audioUp.set(0, 1, 0).applyQuaternion(camera.quaternion);
-    player.eye(_audioPos);
-    audio.setListener(_audioPos, _audioFwd, _audioUp);
+    camera.getWorldDirection(_fwd);
+    _up.set(0, 1, 0).applyQuaternion(camera.quaternion);
+    player.eye(_pos);
+    audio.setListener(_pos, _fwd, _up);
 
-    // Respawn timer.
-    if (respawnIn > 0) {
-      respawnIn -= dt;
-      if (respawnIn <= 0) {
-        player.respawn(spawn);
-        hud.setMessage(null);
-      }
-    }
+    if (playing && enemies.aliveCount() === 0) win();
 
-    // HUD state.
-    hud.setLocked(input.isLocked);
+    hud.setVisible(playing);
     hud.setHealth(player.health, 100);
-    const left = enemies.aliveCount();
-    if (left === 0 && !cleared) {
-      cleared = true;
-      hud.setMessage('HOSTILES ELIMINATED');
-    }
-    hud.setObjective(
-      cleared ? 'SECTOR CLEAR' : `ELIMINATE HOSTILES — ${left} / ${totalEnemies}`,
-    );
+    hud.setObjective(`ELIMINATE HOSTILES — ${enemies.aliveCount()} / ${totalEnemies}`);
 
-    post.render();
+    if (usePost) post.render();
+    else renderer.render(scene, camera);
     stats.sample(frameMs);
   },
 });
 
 renderer.setAnimationLoop(loop.frame);
 
-// --- QA states ---
+// --- QA states (drive the game into a playable pose for the critic harness) ---
 const _qaTmp = new THREE.Vector3();
 const _qaEye = new THREE.Vector3();
-
 const yawToward = (dx: number, dz: number): number => Math.atan2(-dx, -dz);
 
 function aimAt(from: THREE.Vector3, target: THREE.Vector3): void {
-  player.setPose(from.x, from.y, from.z, yawToward(target.x - from.x, target.z - from.z), 0);
   player.eye(_qaEye);
   const dx = target.x - _qaEye.x;
   const dy = target.y - _qaEye.y;
   const dz = target.z - _qaEye.z;
-  const horiz = Math.hypot(dx, dz);
-  const pitch = Math.atan2(dy, horiz);
-  player.setPose(from.x, from.y, from.z, yawToward(dx, dz), pitch);
+  player.setPose(from.x, from.y, from.z, yawToward(dx, dz), Math.atan2(dy, Math.hypot(dx, dz)));
   player.updateCamera(1, 0, 0);
 }
 
 installQaHooks({
   states: {
-    // Survey the arena and the bots.
+    menu: () => {
+      quitToMenu();
+    },
     overview: () => {
+      startGame();
       player.setPose(14, 0.9, 13, yawToward(-1, -1), -0.12);
       player.updateCamera(1, 0, 0);
     },
-    // Aim at the nearest bot and put a lethal burst into it (toppling body + blood + decals).
     combat: () => {
+      startGame();
       const from = new THREE.Vector3(2, 0.9, 6);
       player.setPose(from.x, from.y, from.z, Math.PI, 0);
       player.eye(_qaEye);
@@ -249,7 +339,7 @@ installQaHooks({
           aimAt(from, _qaTmp);
           weapon.fireOnce();
         }
-        aimAt(from, _qaTmp); // settle aim on the target for the shot
+        aimAt(from, _qaTmp);
       }
     },
   },

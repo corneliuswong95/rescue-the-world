@@ -45,6 +45,11 @@ export class AudioEngine implements Sfx {
     if (this.ctx && this.ctx.state === 'suspended') void this.ctx.resume();
   }
 
+  /** Master volume, 0..1 (settings). */
+  setMasterVolume(v: number): void {
+    if (this.master) this.master.gain.value = Math.max(0, Math.min(1, v)) * 0.8;
+  }
+
   private makeNoise(seconds: number): AudioBuffer {
     const ctx = this.ctx!;
     const len = Math.floor(ctx.sampleRate * seconds);

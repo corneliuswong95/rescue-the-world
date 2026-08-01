@@ -35,6 +35,9 @@ export class Player {
   /** Called once when health reaches zero. */
   onDied?: () => void;
 
+  /** Look-sensitivity multiplier (settings). */
+  sensitivity = 1;
+
   private hp = MAX_HP;
   private dead = false;
 
@@ -221,8 +224,9 @@ export class Player {
 
   /** Per-frame mouse-look (responsive; not gated on the sim step). */
   applyLook(lookX: number, lookY: number): void {
-    this.yaw -= lookX * SENS;
-    this.pitch -= lookY * SENS;
+    const s = SENS * this.sensitivity;
+    this.yaw -= lookX * s;
+    this.pitch -= lookY * s;
     this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch));
   }
 

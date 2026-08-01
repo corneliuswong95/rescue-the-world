@@ -401,7 +401,7 @@ export class Enemy implements Hittable {
   /** Per-frame visual update (interpolated). Returns false when fully cleaned up. */
   render(alpha: number, dt: number): boolean {
     if (this.state === 'dead' && this.deathTimer <= 0) {
-      this.cleanup();
+      this.dispose();
       return false;
     }
     this.character.play(this.animState);
@@ -416,7 +416,8 @@ export class Enemy implements Hittable {
     return true;
   }
 
-  private cleanup(): void {
+  /** Remove from scene + physics. Called on death cleanup and on level reset. */
+  dispose(): void {
     this.deps.scene.remove(this.group);
     // The character clone SHARES geometry/materials with the template — only stop its mixer;
     // never dispose those shared resources. Dispose only this enemy's own muzzle-flash assets.

@@ -42,6 +42,12 @@ export class EnemyManager {
     return n;
   }
 
+  /** Remove every enemy (level reset). */
+  clear(): void {
+    for (const e of this.enemies) e.dispose();
+    this.enemies.length = 0;
+  }
+
   /** Nearest living enemy centre to `from`, or null. Used to frame QA shots. */
   nearestAlive(from: THREE.Vector3, out: THREE.Vector3): boolean {
     let best = Infinity;

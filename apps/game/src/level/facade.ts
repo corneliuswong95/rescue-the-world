@@ -11,7 +11,26 @@
  * courtyard of buildings costs roughly one draw call per kit mesh used.
  */
 import * as THREE from 'three/webgpu';
+import {
+  float,
+  hash,
+  instanceIndex,
+  mix,
+  mx_fractal_noise_float,
+  normalMap,
+  positionWorld,
+  smoothstep,
+  texture,
+  vec2,
+  vec3,
+} from 'three/tsl';
 import { InstanceBatch } from './props';
+
+export interface BrickMaps {
+  map: THREE.Texture | null;
+  normalMap: THREE.Texture | null;
+  roughnessMap: THREE.Texture | null;
+}
 
 const BAY = 3;
 const PIER = 0.3;
@@ -70,17 +89,47 @@ export class FacadeKit {
     kitScene.traverse((o) => {
       if (o.name && !this.nodes.has(o.name)) this.nodes.set(o.name, o);
     });
-    this.retintGlass(kitScene);
+    this.weather(kitScene);
   }
 
-  /** Old factory glass: opaque, dark interior, grimy specular — there are no interiors behind. */
-  private retintGlass(kitScene: THREE.Object3D): void {
-    const glass = new THREE.MeshStandardMaterial({ color: 0x20262b, roughness: 0.18, metalness: 0.0 });
+  private brick: BrickMaps = { map: null, normalMap: null, roughnessMap: null };
+
+  /** The kit's brick texture set, for other brick structures (the smokestack). */
+  brickMaps(): BrickMaps {
+    return this.brick;
+  }
+
+  /**
+   * Swap the kit's clean scan materials for weathered node materials, and its glass for an
+   * opaque, per-pane-varied factory glass (there are no interiors behind the windows).
+   */
+  private weather(kitScene: THREE.Object3D): void {
+    const glass = new THREE.MeshStandardNodeMaterial();
+    const pane = hash(instanceIndex); // one value per window instance
+    const dead = smoothstep(0.93, 0.95, pane); // ~6% grimed-over / boarded-dark panes
+    const lowInFloor = float(1).sub(positionWorld.y.sub(0.15).div(3).fract()); // dirt pools at the sill
+    glass.colorNode = mix(vec3(0.03, 0.036, 0.04).mul(pane.mul(0.6).add(0.7)), vec3(0.05, 0.045, 0.04), dead);
+    glass.roughnessNode = mix(float(0.05), float(0.45), pane).add(lowInFloor.mul(0.12)).add(dead.mul(0.5)).min(1);
+    glass.metalnessNode = float(0);
+
+    const weathered = new Map<THREE.Material, THREE.Material>();
     kitScene.traverse((o) => {
       const mesh = o as THREE.Mesh;
       if (!mesh.isMesh) return;
       const mat = mesh.material as THREE.MeshStandardMaterial;
-      if (mat.name.includes('glass')) mesh.material = glass;
+      if (mat.name.includes('glass')) {
+        mesh.material = glass;
+        return;
+      }
+      let w = weathered.get(mat);
+      if (!w) {
+        w = weatheredWall(mat);
+        weathered.set(mat, w);
+        if (mat.name.endsWith('_brick')) {
+          this.brick = { map: mat.map, normalMap: mat.normalMap, roughnessMap: mat.roughnessMap };
+        }
+      }
+      mesh.material = w;
     });
   }
 
@@ -182,4 +231,26 @@ export class FacadeKit {
   build(parent: THREE.Object3D): void {
     this.batch.build(parent);
   }
+}
+
+/**
+ * Weathering over a clean facade scan, all in world space so every bay reads differently:
+ * a dark splash zone at the base, vertical rain streaks, soot under the cornice, and a slow
+ * ±8% tint drift so the four buildings aren't identical brick.
+ */
+function weatheredWall(src: THREE.MeshStandardMaterial): THREE.MeshStandardNodeMaterial {
+  const m = new THREE.MeshStandardNodeMaterial({ name: `${src.name}_weathered`, side: src.side });
+  const base = src.map ? texture(src.map).rgb : vec3(1);
+  const along = positionWorld.x.add(positionWorld.z); // runs along any of the four walls
+  const streak = mx_fractal_noise_float(vec2(along.mul(5.5), positionWorld.y.mul(0.22)), 3, 2.0, 0.5);
+  const splash = float(1).sub(smoothstep(0.15, 0.95, positionWorld.y)).mul(0.38);
+  const soot = smoothstep(8.2, 9.4, positionWorld.y).mul(0.3);
+  const drift = mx_fractal_noise_float(positionWorld.xz.mul(0.035), 2, 2.0, 0.5).mul(0.08).add(1);
+  const dirt = float(1).sub(splash).sub(soot).sub(streak.max(0).mul(0.16));
+  m.colorNode = base.mul(vec3(src.color.r, src.color.g, src.color.b)).mul(dirt).mul(drift);
+  if (src.normalMap) m.normalNode = normalMap(texture(src.normalMap), vec2(src.normalScale.x, src.normalScale.y));
+  m.roughnessNode = src.roughnessMap ? texture(src.roughnessMap).g.mul(src.roughness) : float(src.roughness);
+  m.metalnessNode = src.metalnessMap ? texture(src.metalnessMap).b.mul(src.metalness) : float(src.metalness);
+  if (src.aoMap) m.aoNode = texture(src.aoMap).r;
+  return m;
 }

@@ -26,6 +26,8 @@ const JUMP_SPEED = 7.2;
 const SENS = 0.0022; // radians per mouse pixel
 
 const MAX_HP = 100;
+const REGEN_DELAY = 4; // s without damage before health starts coming back
+const REGEN_RATE = 30; // HP/s
 
 export class Player {
   readonly collider: RAPIER_NS.Collider;
@@ -51,7 +53,7 @@ export class Player {
   private readonly pos = new THREE.Vector3();
   private readonly prevPos = new THREE.Vector3();
   private readonly vel = new THREE.Vector3(); // world-space, y = vertical
-  private yaw = Math.PI; // face -Z toward the cover
+  private yaw = 0; // yaw 0 looks down -Z (north, into the yard)
   private pitch = 0;
   private grounded = false;
   private crouchT = 0; // 0 stand → 1 crouch
@@ -59,6 +61,10 @@ export class Player {
   private jumpLatch = false;
   private bobPhase = 0;
   private bobAmt = 0;
+  private sinceHit = REGEN_DELAY;
+  // Camera punch when hit (radians), decayed in the fixed step.
+  private punchPitch = 0;
+  private punchRoll = 0;
 
   // scratch (no per-frame allocation)
   private readonly wish = new THREE.Vector3();
@@ -160,6 +166,14 @@ export class Player {
 
     this.body.setNextKinematicTranslation({ x: this.pos.x, y: this.pos.y, z: this.pos.z });
 
+    // Health regen after a quiet spell; hit punch settles.
+    this.sinceHit += dt;
+    if (!this.dead && this.sinceHit > REGEN_DELAY && this.hp < MAX_HP) {
+      this.hp = Math.min(MAX_HP, this.hp + REGEN_RATE * dt);
+    }
+    this.punchPitch = damp(this.punchPitch, 0, 10, dt);
+    this.punchRoll = damp(this.punchRoll, 0, 10, dt);
+
     // Head-bob amount tracks grounded horizontal speed.
     const hSpeed = Math.hypot(this.vel.x, this.vel.z);
     if (this.grounded) this.bobPhase += hSpeed * dt * 1.1;
@@ -204,6 +218,10 @@ export class Player {
   get health(): number {
     return this.hp;
   }
+  /** Grounded horizontal speed, m/s (weapon move-inaccuracy, HUD). */
+  get speed(): number {
+    return Math.hypot(this.vel.x, this.vel.z);
+  }
   isAlive(): boolean {
     return !this.dead;
   }
@@ -218,6 +236,10 @@ export class Player {
   applyDamage(amount: number, fromPos: THREE.Vector3): void {
     if (this.dead) return;
     this.hp -= amount;
+    this.sinceHit = 0;
+    // Camera punch: a small upward jolt with a random roll (1.5–2.5°).
+    this.punchPitch += 0.026 + Math.random() * 0.016;
+    this.punchRoll += (Math.random() - 0.5) * 0.05;
     const dx = fromPos.x - this.pos.x;
     const dz = fromPos.z - this.pos.z;
     const srcAngle = Math.atan2(dx, dz);
@@ -232,22 +254,27 @@ export class Player {
     }
   }
 
-  respawn(spawn: THREE.Vector3): void {
+  respawn(spawn: THREE.Vector3, yaw = 0): void {
     this.hp = MAX_HP;
     this.dead = false;
-    this.setPose(spawn.x, spawn.y, spawn.z, Math.PI, 0, 0);
+    this.sinceHit = REGEN_DELAY;
+    this.punchPitch = this.punchRoll = 0;
+    this.setPose(spawn.x, spawn.y, spawn.z, yaw, 0, 0);
   }
 
-  /** Per-frame mouse-look (responsive; not gated on the sim step). */
-  applyLook(lookX: number, lookY: number): void {
-    const s = SENS * this.sensitivity;
+  /**
+   * Per-frame mouse-look (responsive; not gated on the sim step).
+   * @param scale extra multiplier, e.g. lower sensitivity while aiming down sights
+   */
+  applyLook(lookX: number, lookY: number, scale = 1): void {
+    const s = SENS * this.sensitivity * scale;
     this.yaw -= lookX * s;
     this.pitch -= lookY * s;
     this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch));
   }
 
   /** Per-frame camera placement, interpolating between sim steps and adding recoil + bob. */
-  updateCamera(alpha: number, recoilPitch: number, recoilYaw: number): void {
+  updateCamera(alpha: number, recoilPitch: number, recoilYaw: number, recoilRoll = 0): void {
     // Interpolated capsule centre → feet → eye.
     const cy = this.prevPos.y + (this.pos.y - this.prevPos.y) * alpha;
     const cx = this.prevPos.x + (this.pos.x - this.prevPos.x) * alpha;
@@ -264,7 +291,7 @@ export class Player {
     this.eyeScratch.y += bobY;
 
     this.camera.position.copy(this.eyeScratch);
-    this.euler.set(this.pitch + recoilPitch, this.yaw + recoilYaw, 0);
+    this.euler.set(this.pitch + recoilPitch + this.punchPitch, this.yaw + recoilYaw, recoilRoll + this.punchRoll);
     this.camera.quaternion.setFromEuler(this.euler);
   }
 }

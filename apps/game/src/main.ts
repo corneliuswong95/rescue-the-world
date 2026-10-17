@@ -9,7 +9,7 @@ import * as THREE from 'three/webgpu';
 import { createRenderer } from './engine/renderer';
 import { createStatsOverlay } from './engine/stats';
 import { createFixedLoop } from './engine/loop';
-import { setupEnvironment } from './engine/environment';
+import { bakeLocalProbe, setupEnvironment } from './engine/environment';
 import { applyHaze, createSun } from './engine/atmosphere';
 import { createPost } from './engine/post';
 import { initPhysics, createPhysicsWorld } from './physics/world';
@@ -44,7 +44,10 @@ const physics = createPhysicsWorld(STEP_HZ);
 // --- Scene, camera, lighting ---
 const scene = new THREE.Scene();
 
-const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, 300);
+// 62° vertical ≈ 94° horizontal at 16:9 — wide enough for awareness without fisheye edges.
+const FOV = 62;
+const ADS_FOV = 46;
+const camera = new THREE.PerspectiveCamera(FOV, window.innerWidth / window.innerHeight, 0.05, 300);
 scene.add(camera);
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -68,7 +71,7 @@ const nav = new Navigation(level.navMeshes);
 
 // --- Player + weapon + combat services ---
 const input = new Input(renderer.domElement);
-const spawn = new THREE.Vector3(0, 0.9, 8);
+const spawn = new THREE.Vector3(4, 0.9, 12.2); // behind the checker-barrier line, facing the yard
 const player = new Player(physics.world, input, camera, spawn);
 
 const registry = new HitRegistry();
@@ -216,9 +219,9 @@ function applyQuality(q: Quality): void {
     sun.setShadowQuality(null);
     usePost = false;
   } else {
-    // TRAA resolves sub-pixel detail, so 1.5× is the high-tier ceiling (2× on a retina panel
-    // would quadruple fill cost for little visible gain).
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, q === 'high' ? 1.5 : 1));
+    // TRAA + sharpen resolve sub-pixel detail, so 1.25× is the high-tier ceiling: a retina panel
+    // at 2× would ~2.5× the fill cost (measured 20–35 fps on an M1) for little visible gain.
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, q === 'high' ? 1.25 : 1));
     sun.setShadowQuality(q === 'high' ? 4096 : 2048);
     post.setQuality(q);
     usePost = true;
@@ -233,7 +236,50 @@ function applySettings(s: Settings): void {
   saveSettings(settings);
 }
 applySettings(settings);
+
+// Local light probe from the middle of the yard (viewmodel hidden so it isn't captured).
+weapon.setVisible(false);
+bakeLocalProbe(renderer, scene, sky, new THREE.Vector3(0, 2.4, 0));
+
+// Shader prewarm: compile every material × pass variant behind the boot, so the first DEPLOY,
+// shot, impact and kill don't hitch on pipeline compiles. Bots are spawned, pooled effects are
+// un-hidden, and the real post pipeline renders the yard from four directions.
+async function prewarm(): Promise<void> {
+  spawnEnemies();
+  weapon.setVisible(true);
+  const unhidden: THREE.Object3D[] = [];
+  scene.traverse((o) => {
+    if (!o.visible) {
+      o.visible = true;
+      unhidden.push(o);
+    }
+  });
+  for (let i = 0; i < 4; i++) {
+    player.setPose(0, 0.9, 0, (i * Math.PI) / 2, 0);
+    player.updateCamera(1, 0, 0);
+    await renderer.compileAsync(scene, camera);
+    if (usePost) post.render();
+    else renderer.render(scene, camera);
+  }
+  for (const o of unhidden) o.visible = false;
+  weapon.setVisible(false);
+  enemies.clear();
+  player.respawn(spawn);
+}
+await prewarm();
 menus.showMenu();
+// Main-menu backdrop: a slow, eased dolly across the yard toward the smokestack.
+let menuT = 0;
+const _menuFrom = new THREE.Vector3(-13, 2.1, 15);
+const _menuTo = new THREE.Vector3(7, 1.7, 9);
+const _menuLook = new THREE.Vector3(-4, 4.5, -18);
+function menuFlythrough(dt: number): void {
+  menuT += dt / 40; // 40 s per pass, ping-pong
+  const t = 0.5 - 0.5 * Math.cos(Math.PI * (menuT % 2 < 1 ? menuT % 1 : 1 - (menuT % 1)));
+  camera.position.lerpVectors(_menuFrom, _menuTo, t);
+  camera.lookAt(_menuLook);
+}
+
 // --- Loop ---
 const _fwd = new THREE.Vector3();
 const _up = new THREE.Vector3();
@@ -254,7 +300,8 @@ const loop = createFixedLoop(STEP_HZ, {
     const fx = active ? dt : 0;
     const fi = input.drain();
 
-    if (input.isLocked && active) player.applyLook(fi.lookX, fi.lookY);
+    // ADS slows look ~30% so fine aim stays controllable at the narrower FOV.
+    if (input.isLocked && active) player.applyLook(fi.lookX, fi.lookY, 1 - 0.3 * weapon.adsFactor);
     weapon.update(
       qaAim ? dt : fx, // QA ADS pose keeps animating the aim-in while the sim is frozen
       active ? fi.firePressed : 0,
@@ -262,7 +309,7 @@ const loop = createFixedLoop(STEP_HZ, {
       active && input.isDown('KeyR'),
       (active && fi.aimHeld) || qaAim,
     );
-    const wantFov = 70 - 18 * weapon.adsFactor;
+    const wantFov = FOV - (FOV - ADS_FOV) * weapon.adsFactor;
     if (Math.abs(camera.fov - wantFov) > 0.05) {
       camera.fov = wantFov;
       camera.updateProjectionMatrix();
@@ -271,7 +318,8 @@ const loop = createFixedLoop(STEP_HZ, {
       player.eye(_pos);
       enemies.broadcastGunfire(_pos);
     }
-    player.updateCamera(alpha, weapon.recoil.pitch, weapon.recoil.yaw);
+    if (gameState === 'menu') menuFlythrough(dt);
+    else player.updateCamera(alpha, weapon.recoil.pitch, weapon.recoil.yaw);
     enemies.render(alpha, fx);
 
     playerTracers.update(fx);
@@ -320,6 +368,12 @@ installQaHooks({
   states: {
     menu: () => {
       quitToMenu();
+    },
+    // The real first frame a player sees after DEPLOY (no pose override).
+    spawn: () => {
+      startGame();
+      player.updateCamera(1, 0, 0);
+      qaFreeze = true;
     },
     overview: () => {
       startGame();

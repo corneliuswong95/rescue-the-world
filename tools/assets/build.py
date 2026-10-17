@@ -34,7 +34,6 @@ MODELS = {
     "old_tyre": (512, 0.0005, False),
     "exterior_aircon_unit": (1024, 0.001, False),
     "utility_box_02": (1024, 0.0005, False),
-    "street_lamp_01": (1024, 0.001, False),
     "metal_trash_can": (1024, 0.001, False),
     "trashbag": (512, 0.001, False),
     "cardboard_box_01": (512, 0.002, False),

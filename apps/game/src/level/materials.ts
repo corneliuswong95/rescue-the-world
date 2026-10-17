@@ -12,6 +12,7 @@
 import * as THREE from 'three/webgpu';
 import {
   float,
+  luminance,
   mix,
   mx_fractal_noise_float,
   normalMap,
@@ -26,6 +27,12 @@ export interface LevelMaterials {
   asphalt: THREE.MeshStandardNodeMaterial;
   sidewalk: THREE.MeshStandardNodeMaterial;
   concrete: THREE.MeshStandardNodeMaterial;
+  /** Weathered structural steel (dock lips, cable hangers): dark, rust-mottled. */
+  steel: THREE.MeshStandardNodeMaterial;
+  /** Worn yellow safety paint over steel/concrete. */
+  safetyPaint: THREE.MeshStandardNodeMaterial;
+  /** Black rubber (dock bumpers, cables). */
+  rubber: THREE.MeshStandardNodeMaterial;
 }
 
 interface TexSet {
@@ -80,13 +87,31 @@ export async function loadLevelMaterials(): Promise<LevelMaterials> {
 
   const sidewalk = surface(sidewalkTex, new THREE.Color(0.92, 0.9, 0.86));
 
-  // Cast concrete: dirt splash line near the ground on vertical faces.
-  const concrete = surface(concreteTex, new THREE.Color(0.96, 0.95, 0.92));
+  // Cast concrete: the formwork scan is warm beige — pull it to a weathered grey (part-
+  // desaturate + darken) and add a dirt splash line near the ground on vertical faces.
+  const concrete = surface(concreteTex, new THREE.Color(1, 1, 1));
   const grime = smoothstep(0.0, 0.85, positionWorld.y).mul(0.42).add(0.58);
-  concrete.colorNode = texture(concreteTex.color)
-    .rgb.mul(vec3(0.96, 0.95, 0.92))
-    .mul(macro(0.21, 0.12))
+  const raw = texture(concreteTex.color).rgb;
+  concrete.colorNode = mix(vec3(luminance(raw)), raw, 0.35)
+    .mul(0.78)
+    .mul(macro(0.21, 0.14))
     .mul(grime);
 
-  return { asphalt, sidewalk, concrete };
+  // Procedural metals/paint: low-frequency mottling + fine breakup, no texture memory.
+  const fine = mx_fractal_noise_float(positionWorld.mul(9), 3, 2.0, 0.5);
+  const steel = new THREE.MeshStandardNodeMaterial();
+  const rust = smoothstep(0.15, 0.6, mx_fractal_noise_float(positionWorld.mul(1.7), 3, 2.0, 0.55));
+  steel.colorNode = mix(vec3(0.11, 0.11, 0.115), vec3(0.24, 0.12, 0.06), rust).mul(fine.mul(0.12).add(1));
+  steel.roughnessNode = mix(float(0.48), float(0.85), rust).add(fine.mul(0.08));
+  steel.metalnessNode = mix(float(0.85), float(0.2), rust);
+
+  const safetyPaint = new THREE.MeshStandardNodeMaterial();
+  const wear = smoothstep(0.35, 0.65, mx_fractal_noise_float(positionWorld.mul(3.2), 4, 2.0, 0.55));
+  safetyPaint.colorNode = mix(vec3(0.62, 0.42, 0.04), vec3(0.16, 0.15, 0.14), wear).mul(fine.mul(0.1).add(1));
+  safetyPaint.roughnessNode = mix(float(0.62), float(0.8), wear);
+  safetyPaint.metalnessNode = float(0);
+
+  const rubber = new THREE.MeshStandardNodeMaterial({ color: 0x141414, roughness: 0.82, metalness: 0 });
+
+  return { asphalt, sidewalk, concrete, steel, safetyPaint, rubber };
 }

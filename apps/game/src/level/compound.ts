@@ -14,7 +14,8 @@ import type RAPIER_NS from '@dimforge/rapier3d-compat';
 import type { LevelMaterials } from './materials';
 import { StaticGeometry } from './geometry';
 import { LevelColliders } from './colliders';
-import { FacadeKit } from './facade';
+import { FacadeKit, type BrickMaps } from './facade';
+import { float, mx_fractal_noise_float, normalMap, positionWorld, smoothstep, step, texture, uv, vec2, vec3 } from 'three/tsl';
 import { PropSet, loadGlb } from './props';
 
 export const PROP_NAMES = [
@@ -28,7 +29,6 @@ export const PROP_NAMES = [
   'old_tyre',
   'exterior_aircon_unit',
   'utility_box_02',
-  'street_lamp_01',
   'metal_trash_can',
   'trashbag',
   'cardboard_box_01',
@@ -134,14 +134,41 @@ export function buildLevel(
   col.box([0.5, BH, 2 * WALL + 2], [-WALL - 0.25, BH / 2, 0]);
 
   // --- Loading docks (west at the W garage, east at the E garage) + ramps. ---
-  const dock = (x0: number, x1: number, z0: number, z1: number): void =>
-    solid(mat.concrete, [x1 - x0, DOCK_H, z1 - z0], [(x0 + x1) / 2, DOCK_H / 2, (z0 + z1) / 2], 2.2);
+  // Cast-concrete body with a worn grey deck, a steel angle on every exposed lip with a faded
+  // yellow safety band under it, and black rubber bumpers on the truck face.
+  const CAP = 0.06;
+  const dock = (x0: number, x1: number, z0: number, z1: number): void => {
+    const cx = (x0 + x1) / 2;
+    const cz = (z0 + z1) / 2;
+    geo.box(mat.concrete, [x1 - x0, DOCK_H - CAP, z1 - z0], [cx, (DOCK_H - CAP) / 2, cz], 0, 2.2);
+    geo.box(mat.sidewalk, [x1 - x0, CAP, z1 - z0], [cx, DOCK_H - CAP / 2, cz], 0, 2.4);
+    col.box([x1 - x0, DOCK_H, z1 - z0], [cx, DOCK_H / 2, cz]);
+  };
+  /** Steel lip + safety band along a dock edge; `out` is the outward face normal (±x or ±z). */
+  const lip = (a: number, b: number, at: number, axis: 'x' | 'z', out: number): void => {
+    const len = Math.abs(b - a);
+    const mid = (a + b) / 2;
+    const angle: [number, number, number] = axis === 'x' ? [len, 0.07, 0.07] : [0.07, 0.07, len];
+    const band: [number, number, number] = axis === 'x' ? [len, 0.16, 0.012] : [0.012, 0.16, len];
+    const o = at + out * 0.03;
+    const ob = at + out * 0.004;
+    geo.box(mat.steel, angle, axis === 'x' ? [mid, DOCK_H - 0.035, o] : [o, DOCK_H - 0.035, mid], 0, 1);
+    geo.box(mat.safetyPaint, band, axis === 'x' ? [mid, DOCK_H - 0.15, ob] : [ob, DOCK_H - 0.15, mid], 0, 1);
+  };
+  const bumper = (x: number, z: number, axis: 'x' | 'z'): void => {
+    geo.box(mat.rubber, axis === 'x' ? [0.28, 0.32, 0.11] : [0.11, 0.32, 0.28], [x, 0.82, z], 0, 0.5);
+  };
   dock(-WALL, -14, -14, -6);
   dock(14.5, WALL, 0, 7);
+  lip(-14, -6, -14, 'z', 1); // W dock, east face
+  lip(-WALL, -14, -6, 'x', 1); // W dock, south face
+  lip(0, 7, 14.5, 'z', -1); // E dock, west face
+  lip(14.5, WALL, 0, 'x', -1); // E dock, north face
+  lip(14.5, WALL, 7, 'x', 1); // E dock, south face
+  for (const z of [-12.6, -9.6, -7.4]) bumper(-13.94, z, 'z');
+  for (const z of [1.1, 5.9]) bumper(14.44, z, 'z');
   ramp(geo, col, mat.concrete, [-17, 0, -2], Math.PI, 3, DOCK_H, 4); // W dock, rising north
   ramp(geo, col, mat.concrete, [10.5, 0, 3.4], Math.PI / 2, 3, DOCK_H, 4); // E dock, rising east
-  for (const z of [-12.5, -9.5, -7.5]) props.place('old_tyre', { x: -13.92, y: 0.62, z, yaw: Math.PI / 2, collide: false });
-  for (const z of [1.2, 5.8]) props.place('old_tyre', { x: 14.42, y: 0.62, z, yaw: Math.PI / 2, collide: false });
 
   // --- Central cover: an L of jersey barriers + a crate stack. ---
   const jit = (i: number): number => Math.sin(i * 12.9898) * 0.035; // deterministic tiny misalignment
@@ -184,16 +211,34 @@ export function buildLevel(
   props.place('barrel_03', { x: 2.5, y: sy, z: WALL - 0.45 });
   props.place('barrel_01', { x: 3.2, y: sy, z: WALL - 0.42 });
   props.place('old_tyre', { x: -13.5, y: sy + 0.3, z: WALL - 0.2, yaw: 0.15, collide: false });
-  props.place('street_lamp_01', { x: -WALL + 0.3, y: sy, z: 8, yaw: Math.PI / 2 });
-  props.place('street_lamp_01', { x: WALL - 0.3, y: sy, z: -10, yaw: -Math.PI / 2 });
   props.place('modular_fire_escape', { x: -12, y: sy + 3.65, z: -WALL + 0.78, collide: false });
 
-  // Wall-mounted: AC units over the ground floor, security lights over doors (no colliders —
-  // above head height).
-  for (const x of [-15.5, 2.2, 12.6]) props.place('exterior_aircon_unit', { x, y: 3.9, z: -WALL + 0.22, collide: false });
-  props.place('exterior_aircon_unit', { x: WALL - 0.22, y: 3.9, z: -6, yaw: -Math.PI / 2, collide: false });
-  props.place('exterior_aircon_unit', { x: 8, y: 3.9, z: WALL - 0.22, yaw: Math.PI, collide: false });
+  // AC condensers on the sidewalk against the walls (the scan's base sits 0.32 m below its
+  // origin); security lights over doors (no colliders — above head height).
+  const acY = sy + 0.32;
+  for (const x of [-15.5, 2.2, 12.6]) props.place('exterior_aircon_unit', { x, y: acY, z: -WALL + 0.24 });
+  props.place('exterior_aircon_unit', { x: WALL - 0.24, y: acY, z: -6, yaw: -Math.PI / 2 });
+  props.place('exterior_aircon_unit', { x: 8, y: acY, z: WALL - 0.24, yaw: Math.PI });
   for (const x of [-18.1, 1.7]) props.place('security_light', { x, y: 3.1, z: -WALL + 0.03, collide: false });
+
+  // Overhead service cables strung between the buildings (one merged draw).
+  const V = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z);
+  geo.cable(mat.rubber, V(-14, 8.3, -WALL + 0.05), V(-8.5, 7.7, WALL - 0.05), 1.6, 0.016);
+  geo.cable(mat.rubber, V(-13.6, 8.1, -WALL + 0.05), V(-8.1, 7.5, WALL - 0.05), 1.75, 0.011);
+  geo.cable(mat.rubber, V(6.5, 8.0, -WALL + 0.05), V(11.5, 8.4, WALL - 0.05), 1.4, 0.016);
+  geo.cable(mat.rubber, V(-WALL + 0.05, 7.9, 9.5), V(WALL - 0.05, 8.2, 4.5), 1.9, 0.014);
+  for (const [x, y, z] of [[-14, 8.3, -WALL + 0.06], [-8.5, 7.7, WALL - 0.06], [6.5, 8.0, -WALL + 0.06], [11.5, 8.4, WALL - 0.06]]) {
+    geo.box(mat.steel, [0.1, 0.16, 0.12], [x, y, z], 0, 1); // wall brackets
+  }
+
+  // Ground storytelling: oil stains under the car/generator, hatched keep-clear box at the dock.
+  for (const [x, z, r] of [[-9.2, 9.4, 1.4], [12.4, -12.0, 0.9], [-6.2, -WALL + 1.4, 1.1], [11.2, 3.3, 1.2]]) {
+    stain(root, x, z, r);
+  }
+  hatch(root, mat, -14, -11.4, -13.4, -6.6);
+
+  // Landmark: a foundry smokestack rising behind the north block.
+  smokestack(root, kit.brickMaps(), -9, -27.5);
 
   // Manhole covers in the asphalt.
   props.place('water_manhole_cover', { x: 3.4, y: 0.012, z: 2.8, collide: false });
@@ -243,4 +288,78 @@ function barrels(props: PropSet, x: number, z: number): void {
   props.place('barrel_01', { x, z, yaw: 0.4 });
   props.place('barrel_03', { x: x + 0.62, z: z + 0.18, yaw: 1.7 });
   props.place('barrel_01', { x: x + 0.24, z: z + 0.6, yaw: 2.9 });
+}
+
+const STAIN_MAT = (() => {
+  const m = new THREE.MeshStandardNodeMaterial({ transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
+  const d = uv().sub(0.5).length().mul(2);
+  const edge = d.add(mx_fractal_noise_float(positionWorld.xz.mul(2.2), 3, 2.0, 0.5).mul(0.35));
+  m.colorNode = vec3(0.025, 0.022, 0.02);
+  m.roughnessNode = float(0.2); // oily sheen catches the sky
+  m.metalnessNode = float(0);
+  m.opacityNode = float(1).sub(smoothstep(0.3, 1.0, edge)).mul(0.78);
+  return m;
+})();
+
+/** Flat oil stain decal on the asphalt (radius r). */
+function stain(parent: THREE.Object3D, x: number, z: number, r: number): void {
+  const g = new THREE.PlaneGeometry(2 * r, 2 * r).rotateX(-Math.PI / 2);
+  const m = new THREE.Mesh(g, STAIN_MAT);
+  m.position.set(x, 0.004, z);
+  m.rotation.y = x * 1.7 + z; // vary the noise footprint
+  m.receiveShadow = true;
+  parent.add(m);
+}
+
+/** Hatched yellow "keep clear" box painted on the asphalt over [x0,x1]×[z0,z1]. */
+function hatch(parent: THREE.Object3D, mat: LevelMaterials, x0: number, x1: number, z0: number, z1: number): void {
+  const w = x1 - x0;
+  const d = z1 - z0;
+  const m = new THREE.MeshStandardNodeMaterial({ transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
+  m.colorNode = mat.safetyPaint.colorNode;
+  m.roughnessNode = mat.safetyPaint.roughnessNode;
+  m.metalnessNode = float(0);
+  const st = uv();
+  const border = float(1).sub(
+    step(0.1 / w, st.x).mul(step(st.x, 1 - 0.1 / w)).mul(step(0.1 / d, st.y)).mul(step(st.y, 1 - 0.1 / d)),
+  );
+  const stripes = step(0.62, positionWorld.x.add(positionWorld.z).mul(1.2).fract());
+  const scuffed = smoothstep(0.1, 0.55, mx_fractal_noise_float(positionWorld.xz.mul(1.6), 3, 2.0, 0.55));
+  m.opacityNode = border.max(stripes).mul(float(1).sub(scuffed)).mul(0.85);
+  const plane = new THREE.Mesh(new THREE.PlaneGeometry(w, d).rotateX(-Math.PI / 2), m);
+  plane.position.set((x0 + x1) / 2, 0.005, (z0 + z1) / 2);
+  plane.receiveShadow = true;
+  parent.add(plane);
+}
+
+/** Tapered brick chimney with a corbelled, soot-blackened crown (outside the playable yard). */
+function smokestack(parent: THREE.Object3D, maps: BrickMaps, x: number, z: number): void {
+  // prettier-ignore
+  const profile = [[1.75, 0], [1.6, 8], [1.32, 29.6], [1.5, 29.9], [1.5, 31.1], [1.18, 31.1], [1.12, 30.4]]
+    .map(([r, y]) => new THREE.Vector2(r, y));
+  const g = new THREE.LatheGeometry(profile, 40);
+  const uvs = g.getAttribute('uv') as THREE.BufferAttribute;
+  for (let i = 0; i < uvs.count; i++) uvs.setXY(i, uvs.getX(i) * 3.2, uvs.getY(i) * 10.4); // ≈3 m brick tiles
+  const tile = (t: THREE.Texture | null): THREE.Texture | null => {
+    if (!t) return null;
+    const c = t.clone();
+    c.wrapS = c.wrapT = THREE.RepeatWrapping;
+    c.needsUpdate = true;
+    return c;
+  };
+  const m = new THREE.MeshStandardNodeMaterial();
+  const map = tile(maps.map);
+  const nrm = tile(maps.normalMap);
+  const rough = tile(maps.roughnessMap);
+  const soot = smoothstep(22, 30.5, positionWorld.y).mul(0.75);
+  const streaks = mx_fractal_noise_float(vec2(positionWorld.x.add(positionWorld.z).mul(3), positionWorld.y.mul(0.15)), 3, 2.0, 0.5);
+  const base = map ? texture(map).rgb : vec3(0.35, 0.18, 0.12);
+  m.colorNode = base.mul(float(1).sub(soot.mul(streaks.mul(0.3).add(0.85)))).mul(0.92);
+  if (nrm) m.normalNode = normalMap(texture(nrm));
+  m.roughnessNode = rough ? texture(rough).g : float(0.85);
+  m.metalnessNode = float(0);
+  const mesh = new THREE.Mesh(g, m);
+  mesh.position.set(x, 0, z);
+  mesh.castShadow = mesh.receiveShadow = true;
+  parent.add(mesh);
 }

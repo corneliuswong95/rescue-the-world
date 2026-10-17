@@ -20,6 +20,8 @@ export interface SkyLight {
   readonly sunDirection: THREE.Vector3;
   /** Linear sun chromaticity (max channel = 1). */
   readonly sunColor: THREE.Color;
+  /** The sky with the sun clamped out — background for the local probe bake; disposed by it. */
+  readonly iblSky: THREE.DataTexture;
 }
 
 /**
@@ -102,7 +104,6 @@ export async function setupEnvironment(
 
   const pmrem = new THREE.PMREMGenerator(renderer);
   const env = pmrem.fromEquirectangular(iblTex);
-  iblTex.dispose();
   pmrem.dispose();
 
   scene.environment = env.texture;
@@ -112,5 +113,39 @@ export async function setupEnvironment(
   scene.backgroundIntensity = 1.0;
   scene.backgroundRotation.set(0, yaw, 0);
 
-  return { sunDirection: dir, sunColor: col };
+  return { sunDirection: dir, sunColor: col, iblSky: iblTex };
+}
+
+/**
+ * Bake a local light probe once the level is built: render a cube map from inside the yard
+ * (sunlit brick, shadowed walls, asphalt, with the sun-clamped sky above) and PMREM it into
+ * `scene.environment`. Shade then picks up warm bounce from the lit facades, and glass/damp
+ * asphalt reflect the buildings instead of open sky — at zero per-frame cost. The HDRI stays as
+ * the visible background. Hide anything that shouldn't appear in the probe before calling.
+ */
+export function bakeLocalProbe(
+  renderer: THREE.WebGPURenderer,
+  scene: THREE.Scene,
+  sky: SkyLight,
+  at: THREE.Vector3,
+): void {
+  const cubeRT = new THREE.CubeRenderTarget(256, { type: THREE.HalfFloatType });
+  const cubeCam = new THREE.CubeCamera(0.3, 300, cubeRT);
+  cubeCam.position.copy(at);
+  cubeCam.updateMatrixWorld();
+
+  const background = scene.background;
+  scene.background = sky.iblSky;
+  cubeCam.update(renderer, scene);
+  scene.background = background;
+
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const env = pmrem.fromCubemap(cubeRT.texture);
+  pmrem.dispose();
+  cubeRT.dispose();
+  sky.iblSky.dispose();
+
+  scene.environment?.dispose();
+  scene.environment = env.texture;
+  scene.environmentRotation.set(0, 0, 0); // captured in world space
 }

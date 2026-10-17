@@ -23,7 +23,12 @@ import { chromium, type ConsoleMessage } from 'playwright';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
-const BASE_URL = process.env.BASE_URL ?? 'http://localhost:5173';
+// `debug` turns on the in-game stats overlay so the critic can read the perf numbers.
+const BASE_URL = (() => {
+  const u = new URL(process.env.BASE_URL ?? 'http://localhost:5173');
+  u.searchParams.set('debug', '1');
+  return u.toString();
+})();
 const LABEL = process.env.LABEL ?? 'adhoc';
 const OUT_DIR = path.resolve('shots', LABEL);
 const READY_TIMEOUT = 60_000;

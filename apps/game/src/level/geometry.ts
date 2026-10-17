@@ -97,6 +97,17 @@ export class StaticGeometry {
     this.push(material, worldUvWedge(width, height, length, tile), base, yaw);
   }
 
+  /** Hanging cable between two world points with a parabolic sag (m) at mid-span. */
+  cable(material: THREE.Material, a: THREE.Vector3, b: THREE.Vector3, sag: number, radius = 0.014): void {
+    const pts: THREE.Vector3[] = [];
+    for (let i = 0; i <= 12; i++) {
+      const t = i / 12;
+      pts.push(new THREE.Vector3().lerpVectors(a, b, t).setY(a.y + (b.y - a.y) * t - sag * 4 * t * (1 - t)));
+    }
+    const g = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 48, radius, 5, false);
+    this.push(material, g, [0, 0, 0], 0);
+  }
+
   private push(material: THREE.Material, g: THREE.BufferGeometry, pos: [number, number, number], yaw: number): void {
     _q.setFromEuler(_e.set(0, yaw, 0));
     _m.compose(_p.set(pos[0], pos[1], pos[2]), _q, _s);

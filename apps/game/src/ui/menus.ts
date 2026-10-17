@@ -19,15 +19,19 @@ export interface Menus {
 }
 
 const ACCENT = '#e8a33d';
-const PANEL = 'background:rgba(12,14,18,.92);border:1px solid rgba(232,163,61,.35);border-radius:10px';
+const PANEL = 'background:rgba(12,14,18,.55);border-left:2px solid rgba(232,163,61,.7);border-radius:2px';
 
 export function createMenus(initial: Settings): Menus {
   const settings: Settings = { ...initial };
 
   const root = div(
-    `position:fixed;inset:0;z-index:50;display:none;align-items:center;justify-content:center;
-     font-family:ui-sans-serif,system-ui,sans-serif;color:#e8ecf2;
-     background:radial-gradient(ellipse at center,rgba(8,10,14,.72),rgba(4,5,7,.92))`,
+    // Left-column layout over a left-weighted scrim, so the live yard flythrough behind the
+    // menu stays visible on the right.
+    `position:fixed;inset:0;z-index:50;display:none;align-items:center;justify-content:flex-start;
+     padding-left:7vw;box-sizing:border-box;
+     font-family:"Bahnschrift","DIN Alternate","DIN Condensed","Arial Narrow",system-ui,sans-serif;
+     color:#e8ecf2;letter-spacing:.5px;
+     background:linear-gradient(90deg,rgba(4,5,7,.88) 0%,rgba(4,5,7,.62) 34%,rgba(4,5,7,.12) 72%,rgba(4,5,7,0) 100%)`,
   );
   root.style.pointerEvents = 'auto';
   document.body.appendChild(root);

@@ -22,10 +22,9 @@ noted) — content unchanged otherwise.
 | Barrel 01 | Model | polyhaven.com/a/Barrel_01 | CC0 | Drum clusters. |
 | Barrel 03 | Model | polyhaven.com/a/barrel_03 | CC0 | Drum clusters. |
 | Covered Car | Model | polyhaven.com/a/covered_car | CC0 | Tarped car cover. |
-| Old Tyre | Model | polyhaven.com/a/old_tyre | CC0 | Dock bumpers, dressing. |
+| Old Tyre | Model | polyhaven.com/a/old_tyre | CC0 | Dressing. |
 | Exterior Aircon Unit | Model | polyhaven.com/a/exterior_aircon_unit | CC0 | Wall dressing. |
 | Utility Box 02 | Model | polyhaven.com/a/utility_box_02 | CC0 | Wall dressing. |
-| Street Lamp 01 | Model | polyhaven.com/a/street_lamp_01 | CC0 | Sidewalk lamps. |
 | Metal Trash Can | Model | polyhaven.com/a/metal_trash_can | CC0 | Dumpsters. |
 | Trash Bag | Model | polyhaven.com/a/trashbag | CC0 | Dressing. |
 | Cardboard Box 01 | Model | polyhaven.com/a/cardboard_box_01 | CC0 | Dressing. |

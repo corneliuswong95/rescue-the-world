@@ -17,6 +17,9 @@ export interface Hud {
   update(dt: number): void;
 }
 
+// Condensed "military display" stack available without shipping a font file.
+const FONT = `"Bahnschrift","DIN Alternate","DIN Condensed","Arial Narrow",system-ui,sans-serif`;
+
 export function createHud(): Hud {
   // A single root so the whole HUD can be hidden outside of play.
   const hudRoot = el('div', 'position:fixed;inset:0;pointer-events:none;z-index:8;display:none');
@@ -40,50 +43,53 @@ export function createHud(): Hud {
   let hitTimer = 0;
 
   // Health (bottom-left)
-  const healthWrap = el('div', `position:fixed;left:22px;bottom:22px;z-index:9;pointer-events:none;
-    font:600 13px/1 ui-monospace,monospace;color:#eaf2ff`);
-  const healthBarBg = el('div', `width:220px;height:14px;background:rgba(0,0,0,.5);border-radius:3px;
-    overflow:hidden;margin-top:5px;box-shadow:0 0 0 1px rgba(255,255,255,.12)`);
-  const healthBar = el('div', `height:100%;width:100%;background:linear-gradient(90deg,#37d67a,#7ef0a8);
-    transition:width .12s ease-out`);
+  // Health (bottom-left): thin neutral bar + numeric readout; goes red when low.
+  const healthWrap = el('div', `position:fixed;left:28px;bottom:26px;z-index:9;pointer-events:none;
+    font:600 12px/1 ${FONT};letter-spacing:2px;color:rgba(235,240,245,.85);text-shadow:0 1px 2px #000`);
+  const healthLabel = el('div', 'display:flex;justify-content:space-between;width:200px');
+  const healthNum = el('span', 'font-size:20px;letter-spacing:1px;color:#f2f4f6');
+  healthLabel.innerHTML = '<span style="align-self:flex-end">HEALTH</span>';
+  healthLabel.appendChild(healthNum);
+  const healthBarBg = el('div', `width:200px;height:4px;background:rgba(0,0,0,.45);margin-top:6px;
+    box-shadow:0 0 0 1px rgba(255,255,255,.10)`);
+  const healthBar = el('div', 'height:100%;width:100%;background:#e8ecef;transition:width .12s ease-out');
   healthBarBg.appendChild(healthBar);
-  const healthLabel = el('div', '');
-  healthLabel.textContent = 'HEALTH';
   healthWrap.append(healthLabel, healthBarBg);
   hudRoot.appendChild(healthWrap);
 
-  // Ammo (bottom-right)
-  const ammo = el('div', `position:fixed;right:24px;bottom:20px;z-index:9;pointer-events:none;
-    font:700 15px/1.2 ui-monospace,monospace;color:#eaf2ff;text-align:right;
+  // Weapon + ammo (bottom-right)
+  const ammo = el('div', `position:fixed;right:30px;bottom:24px;z-index:9;pointer-events:none;
+    font:600 13px/1.1 ${FONT};letter-spacing:2px;color:rgba(235,240,245,.85);text-align:right;
     text-shadow:0 1px 2px #000`);
   hudRoot.appendChild(ammo);
 
-  // Objective (top-center)
-  const objective = el('div', `position:fixed;left:50%;top:14px;transform:translateX(-50%);z-index:9;
-    pointer-events:none;font:600 13px/1 ui-sans-serif,system-ui,sans-serif;color:#ffd9d0;
-    letter-spacing:.4px;text-shadow:0 1px 2px #000`);
+  // Objective (top-left, under where a minimap would sit)
+  const objective = el('div', `position:fixed;left:28px;top:24px;z-index:9;pointer-events:none;
+    font:600 13px/1 ${FONT};color:#f0e2c8;letter-spacing:2.5px;text-shadow:0 1px 2px #000`);
   hudRoot.appendChild(objective);
 
   // Center message
   const message = el('div', `position:fixed;left:50%;top:44%;transform:translate(-50%,-50%);z-index:12;
-    pointer-events:none;font:700 34px/1.2 ui-sans-serif,system-ui,sans-serif;color:#fff;
+    pointer-events:none;font:700 34px/1.2 ${FONT};letter-spacing:4px;color:#fff;
     text-align:center;text-shadow:0 2px 10px rgba(0,0,0,.8);opacity:0;transition:opacity .25s`);
   hudRoot.appendChild(message);
 
-  // Low-HP vignette
+  // Low-HP vignette: dark-red edges only (centre stays clear), shown below 40% HP.
   const vignette = el('div', `position:fixed;inset:0;z-index:8;pointer-events:none;opacity:0;
-    box-shadow:inset 0 0 200px 60px rgba(180,20,20,.85);transition:opacity .2s`);
+    background:radial-gradient(ellipse at center,rgba(0,0,0,0) 52%,rgba(90,0,0,.55) 82%,rgba(60,0,0,.85) 100%);
+    transition:opacity .25s`);
   hudRoot.appendChild(vignette);
 
-  // Damage direction indicator
-  const dmgDir = el('div', `position:fixed;left:50%;top:50%;width:260px;height:260px;z-index:9;
+  // Damage direction: a wide red arc near the screen edge, rotated toward the shooter.
+  const dmgDir = el('div', `position:fixed;left:50%;top:50%;width:62vmin;height:62vmin;z-index:9;
     transform:translate(-50%,-50%);pointer-events:none;opacity:0`);
-  dmgDir.innerHTML = `<div style="position:absolute;left:50%;top:0;width:70px;height:26px;
-    transform:translateX(-50%);background:radial-gradient(ellipse at bottom,rgba(255,40,40,.9),
-    rgba(255,40,40,0));border-radius:50%"></div>`;
+  dmgDir.innerHTML = `<div style="position:absolute;inset:0;border-radius:50%;
+    border:10px solid transparent;border-top-color:rgba(220,30,20,.85);
+    filter:blur(3px) drop-shadow(0 0 8px rgba(255,40,30,.8))"></div>`;
   hudRoot.appendChild(dmgDir);
   let dmgTimer = 0;
   let aimStep = -1; // last written crosshair opacity step (avoid per-frame style writes)
+  let lastHp = -1;
 
   return {
     setVisible(visible) {
@@ -91,19 +97,20 @@ export function createHud(): Hud {
     },
     setHealth(hp, max) {
       const f = Math.max(0, Math.min(1, hp / max));
+      const shown = Math.ceil(hp);
+      if (shown === lastHp) return; // regen ticks every frame — only touch the DOM on change
+      lastHp = shown;
+      healthNum.textContent = `${shown}`;
       healthBar.style.width = `${f * 100}%`;
-      healthBar.style.background =
-        f > 0.5
-          ? 'linear-gradient(90deg,#37d67a,#7ef0a8)'
-          : f > 0.25
-            ? 'linear-gradient(90deg,#e0a53a,#f0d07e)'
-            : 'linear-gradient(90deg,#d64444,#f08a8a)';
-      vignette.style.opacity = f < 0.35 ? `${(0.35 - f) / 0.35}` : '0';
+      healthBar.style.background = f > 0.35 ? '#e8ecef' : '#e2453a';
+      vignette.style.opacity = f < 0.4 ? `${Math.min(1, (0.4 - f) / 0.3)}` : '0';
     },
     setAmmo(mag, reserve, reloading) {
-      ammo.innerHTML = reloading
-        ? `<span style="color:#ffcf6a">RELOADING…</span>`
-        : `<span style="font-size:22px">${mag}</span> <span style="opacity:.6">/ ${reserve}</span>`;
+      const count = reloading
+        ? `<span style="color:#ffcf6a;font-size:16px">RELOADING</span>`
+        : `<span style="font-size:34px;letter-spacing:1px;color:${mag <= 8 ? '#ff6a4d' : '#f2f4f6'}">${mag}</span>` +
+          `<span style="font-size:16px;opacity:.6"> / ${reserve}</span>`;
+      ammo.innerHTML = `<div style="opacity:.7;margin-bottom:4px">5.56 CARBINE · AUTO</div>${count}`;
     },
     hitmarker(headshot, killed) {
       hitmark.innerHTML = mark(killed ? '#ff5a4d' : headshot ? '#ffd24d' : '#ffffff');

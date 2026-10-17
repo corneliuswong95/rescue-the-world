@@ -21,6 +21,12 @@ function makeHoleTexture(): THREE.CanvasTexture {
   scorch.addColorStop(1, 'rgba(30,28,26,0)');
   ctx.fillStyle = scorch;
   ctx.fillRect(0, 0, s, s);
+  // Pale pulverised-dust halo: makes the strike read on dark asphalt and in shade.
+  const halo = ctx.createRadialGradient(h, h, 14, h, h, 46);
+  halo.addColorStop(0, 'rgba(185,176,164,0.55)');
+  halo.addColorStop(1, 'rgba(185,176,164,0)');
+  ctx.fillStyle = halo;
+  ctx.fillRect(0, 0, s, s);
   // Spall: irregular chips flaking outward from the crater.
   for (let i = 0; i < 9; i++) {
     const a = (i / 9) * Math.PI * 2 + Math.random() * 0.5;

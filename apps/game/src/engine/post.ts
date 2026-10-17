@@ -57,7 +57,7 @@ const GRADE = {
   highlightTint: uniform(new THREE.Vector3(1.05, 1.0, 0.92)), // warm highlights
   sharpen: uniform(0.28),
   vignette: uniform(0.32),
-  grain: uniform(0.035),
+  grain: uniform(0.014),
 };
 
 /** Grade an LDR display-space colour at screen uv `st` (call inside an Fn body). */
@@ -87,8 +87,24 @@ export function createPost(
   pipeline.outputColorTransform = false; // tone mapping is applied explicitly before grading
 
   const buildHigh = (): THREE.Node => {
-    const scenePass = pass(scene, camera);
-    scenePass.setMRT(mrt({ output, normal: directionToColor(normalView), velocity }));
+    // No MSAA on post passes: TRAA/FXAA anti-alias, and a multisampled depth can't feed TRAA's
+    // depth copy (WebGPU validation error every frame).
+    const scenePass = pass(scene, camera, { samples: 0 });
+    // Transparent VFX (smoke, sparks, tracers, flash, decals) must not stamp their quads into the
+    // G-buffer GTAO/TRAA read: they write alpha 0 there, and those attachments blend with the
+    // material's own blending (opaque surfaces don't blend, so they still overwrite).
+    const gbuffer = (value: THREE.Node<'vec4'>) =>
+      Fn((builder: THREE.NodeBuilder) => (builder.material.transparent ? vec4(0) : value))();
+    const sceneMRT = mrt({
+      output,
+      normal: gbuffer(vec4(directionToColor(normalView), 1)),
+      // VelocityNode is a vec2 at runtime; @types models it as a bare class.
+      velocity: gbuffer(vec4(velocity as unknown as THREE.Node<'vec2'>, 0, 1)),
+    });
+    const viaMaterial = new THREE.BlendMode(THREE.MaterialBlending);
+    sceneMRT.setBlendMode('normal', viaMaterial);
+    sceneMRT.setBlendMode('velocity', viaMaterial);
+    scenePass.setMRT(sceneMRT);
     scenePass.getTexture('normal').type = THREE.UnsignedByteType; // 8-bit normals: half the bandwidth
     const color = scenePass.getTextureNode('output');
     const normalTex = scenePass.getTextureNode('normal');
@@ -125,7 +141,7 @@ export function createPost(
   };
 
   const buildMedium = (): THREE.Node => {
-    const scenePass = pass(scene, camera);
+    const scenePass = pass(scene, camera, { samples: 0 }); // FXAA anti-aliases
     const color = scenePass.getTextureNode('output');
     const hdr = color.add(bloom(color, 0.16, 0.45, 1.6));
     // FXAANode is a vec4 TempNode at runtime; its @types class lacks the node-extension typing.

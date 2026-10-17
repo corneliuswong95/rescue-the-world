@@ -16,10 +16,17 @@ export function createStatsOverlay(
 ): Stats {
   const hud = document.createElement('div');
   hud.style.cssText =
-    'position:fixed;top:8px;left:8px;font:12px/1.45 ui-monospace,monospace;color:#9ff;' +
+    'position:fixed;top:8px;right:8px;font:12px/1.45 ui-monospace,monospace;color:#9ff;' +
     'background:rgba(0,0,0,.5);padding:6px 9px;border-radius:5px;white-space:pre;' +
     'pointer-events:none;z-index:10';
   document.body.appendChild(hud);
+  // Developer overlay: hidden for players; `?debug` shows it (the QA harness passes it), F3 toggles.
+  hud.style.display = new URLSearchParams(location.search).has('debug') ? 'block' : 'none';
+  window.addEventListener('keydown', (e) => {
+    if (e.code !== 'F3') return;
+    e.preventDefault();
+    hud.style.display = hud.style.display === 'none' ? 'block' : 'none';
+  });
 
   let acc = 0;
   let frames = 0;
@@ -36,6 +43,7 @@ export function createStatsOverlay(
         frames = 0;
         acc = 0;
       }
+      if (hud.style.display === 'none') return;
       const info = renderer.info.render;
       hud.textContent =
         `FPS        ${fps}\n` +

@@ -22,19 +22,37 @@ interface Spawn {
   alpha: number;
 }
 
-function softDisc(): THREE.CanvasTexture {
+function canvas(draw: (ctx: CanvasRenderingContext2D) => void): THREE.CanvasTexture {
   const c = document.createElement('canvas');
   c.width = c.height = 64;
   const ctx = c.getContext('2d');
   if (!ctx) throw new Error('2D canvas unavailable');
-  const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
-  g.addColorStop(0, 'rgba(255,255,255,1)');
-  g.addColorStop(0.45, 'rgba(255,255,255,0.55)');
+  draw(ctx);
+  return new THREE.CanvasTexture(c);
+}
+
+function blob(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, a: number): void {
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+  g.addColorStop(0, `rgba(255,255,255,${a})`);
+  g.addColorStop(0.5, `rgba(255,255,255,${a * 0.5})`);
   g.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, 64, 64);
-  return new THREE.CanvasTexture(c);
 }
+
+/** Hot round core for sparks. */
+const softDisc = (): THREE.CanvasTexture => canvas((ctx) => blob(ctx, 32, 32, 32, 1));
+
+/** Lumpy, uneven puff (overlapping soft blobs) — reads as dust/smoke, not a perfect orb. */
+const puff = (): THREE.CanvasTexture =>
+  canvas((ctx) => {
+    for (let i = 0; i < 9; i++) {
+      const a = (i / 9) * Math.PI * 2;
+      const d = 6 + (i % 3) * 4;
+      blob(ctx, 32 + Math.cos(a) * d, 32 + Math.sin(a) * d, 13 + (i % 4) * 3, 0.32);
+    }
+    blob(ctx, 32, 32, 18, 0.4);
+  });
 
 class Pool {
   readonly sprite: THREE.Sprite;
@@ -156,13 +174,13 @@ class Pool {
 
 const SPARK: Spawn = { speed: 7, spread: 1.3, life: 0.22, size0: 0.035, size1: 0.012, gravity: 9.8, drag: 1.5, alpha: 1 };
 const CHIP: Spawn = { speed: 3.2, spread: 1.4, life: 0.5, size0: 0.03, size1: 0.025, gravity: 9.8, drag: 0.6, alpha: 1 };
-const DUST: Spawn = { speed: 0.9, spread: 1.1, life: 1.1, size0: 0.12, size1: 0.75, gravity: -0.15, drag: 2.2, alpha: 0.5 };
+const DUST: Spawn = { speed: 0.9, spread: 1.1, life: 1.1, size0: 0.12, size1: 0.75, gravity: -0.15, drag: 2.2, alpha: 0.38 };
 const MIST: Spawn = { speed: 1.4, spread: 0.9, life: 0.38, size0: 0.08, size1: 0.42, gravity: 0.4, drag: 3.5, alpha: 0.75 };
 const DROPS: Spawn = { speed: 3.4, spread: 0.8, life: 0.45, size0: 0.022, size1: 0.018, gravity: 9.8, drag: 0.4, alpha: 0.95 };
 const SMOKE: Spawn = { speed: 0.5, spread: 0.6, life: 0.9, size0: 0.05, size1: 0.32, gravity: -0.25, drag: 2.5, alpha: 0.18 };
 
 const SPARK_COL = new THREE.Color(1.0, 0.62, 0.25);
-const DUST_COL = new THREE.Color(0.52, 0.49, 0.44);
+const DUST_COL = new THREE.Color(0.34, 0.32, 0.29); // unlit: keep it below lit-concrete brightness
 const CHIP_COL = new THREE.Color(0.26, 0.24, 0.22);
 const BLOOD_COL = new THREE.Color(0.28, 0.02, 0.02);
 const SMOKE_COL = new THREE.Color(0.62, 0.62, 0.6);
@@ -174,9 +192,8 @@ export class ParticleFx {
   private readonly _d = new THREE.Vector3();
 
   constructor(scene: THREE.Scene, hotCount = 256, softCount = 384) {
-    const disc = softDisc();
-    this.hot = new Pool(scene, hotCount, true, disc);
-    this.soft = new Pool(scene, softCount, false, disc);
+    this.hot = new Pool(scene, hotCount, true, softDisc());
+    this.soft = new Pool(scene, softCount, false, puff());
   }
 
   /** Bullet into a hard surface: sparks + dark chips + a dust puff off the surface. */

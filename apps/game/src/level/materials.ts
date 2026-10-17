@@ -1,66 +1,92 @@
 /**
- * Loads the CC0 PBR texture sets (ambientCG — see CREDITS.md) into per-role MeshStandard
- * materials for the greybox. Textures tile via per-material repeat (approximate — the room
- * shares one unit-box geometry, so exact per-face world-scaled UVs are a QUALITY_BACKLOG item).
- * Colour maps are sRGB; normal/roughness stay linear.
+ * PBR surface materials for the code-built parts of the level (ground, sidewalks, cast
+ * concrete). Texture sets are PolyHaven CC0 (see CREDITS.md), 2K WebP: albedo (sRGB),
+ * OpenGL normal, and packed ARM (R = AO, G = roughness, B = metal).
+ *
+ * Geometry carries world-scaled UVs (see `level/geometry.ts`), so texel density is uniform on
+ * every face. TSL layers on top of the scans what a single tiling texture can't do:
+ *   - low-frequency macro variation (kills visible tiling over a 40 m courtyard),
+ *   - damp patches on the asphalt (darker + smoother — reads wet without fake mirror puddles),
+ *   - ground-contact grime on vertical concrete (dirt splash line where it meets the floor).
  */
 import * as THREE from 'three/webgpu';
+import {
+  float,
+  mix,
+  mx_fractal_noise_float,
+  normalMap,
+  positionWorld,
+  smoothstep,
+  texture,
+  vec2,
+  vec3,
+} from 'three/tsl';
 
 export interface LevelMaterials {
-  floor: THREE.MeshStandardMaterial;
-  wall: THREE.MeshStandardMaterial;
-  crate: THREE.MeshStandardMaterial;
-  accent: THREE.MeshStandardMaterial;
-  pillar: THREE.MeshStandardMaterial;
+  asphalt: THREE.MeshStandardNodeMaterial;
+  sidewalk: THREE.MeshStandardNodeMaterial;
+  concrete: THREE.MeshStandardNodeMaterial;
+}
+
+interface TexSet {
+  color: THREE.Texture;
+  normal: THREE.Texture;
+  arm: THREE.Texture;
 }
 
 const loader = new THREE.TextureLoader();
 
-async function loadSet(
-  role: string,
-  repeat: [number, number],
-): Promise<{ map: THREE.Texture; normalMap: THREE.Texture; roughnessMap: THREE.Texture }> {
-  const [map, normalMap, roughnessMap] = await Promise.all([
-    loader.loadAsync(`/assets/textures/${role}/color.jpg`),
-    loader.loadAsync(`/assets/textures/${role}/normal.jpg`),
-    loader.loadAsync(`/assets/textures/${role}/rough.jpg`),
-  ]);
-  map.colorSpace = THREE.SRGBColorSpace; // albedo
-  for (const t of [map, normalMap, roughnessMap]) {
+async function loadSet(name: string): Promise<TexSet> {
+  const [color, normal, arm] = await Promise.all(
+    ['color', 'normal', 'arm'].map((m) => loader.loadAsync(`/assets/textures/${name}/${m}.webp`)),
+  );
+  color.colorSpace = THREE.SRGBColorSpace;
+  for (const t of [color, normal, arm]) {
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
-    t.repeat.set(repeat[0], repeat[1]);
     t.anisotropy = 8;
   }
-  return { map, normalMap, roughnessMap };
+  return { color, normal, arm };
+}
+
+/** Macro brightness variation in ~[1-amp, 1+amp], from world XZ at the given frequency. */
+const macro = (freq: number, amp: number) =>
+  mx_fractal_noise_float(positionWorld.xz.mul(freq), 3, 2.0, 0.5).mul(amp).add(1);
+
+function surface(set: TexSet, tint: THREE.Color): THREE.MeshStandardNodeMaterial {
+  const m = new THREE.MeshStandardNodeMaterial();
+  const arm = texture(set.arm);
+  m.colorNode = texture(set.color).rgb.mul(vec3(tint.r, tint.g, tint.b)).mul(macro(0.09, 0.14));
+  m.normalNode = normalMap(texture(set.normal));
+  m.roughnessNode = arm.g;
+  m.metalnessNode = float(0);
+  m.aoNode = arm.r;
+  return m;
 }
 
 export async function loadLevelMaterials(): Promise<LevelMaterials> {
-  const [floorTex, wallTex, crateTex] = await Promise.all([
-    loadSet('floor', [10, 10]),
-    loadSet('wall', [8, 2.5]),
-    loadSet('crate', [1, 1]),
+  const [asphaltTex, sidewalkTex, concreteTex] = await Promise.all([
+    loadSet('asphalt_02'),
+    loadSet('dirty_concrete'),
+    loadSet('concrete_wall_008'),
   ]);
 
-  // Tint the light concrete down to a cooler, less-blown industrial grey (colour multiplies map).
-  const floor = new THREE.MeshStandardMaterial({ ...floorTex, color: 0x8a8f96, roughness: 1, metalness: 0 });
-  const wall = new THREE.MeshStandardMaterial({ ...wallTex, color: 0x9aa0a8, roughness: 1, metalness: 0 });
-  const crate = new THREE.MeshStandardMaterial({ ...crateTex, color: 0xd8c8ad, roughness: 1, metalness: 0 });
+  // Asphalt: damp patches — darker albedo, lower roughness, flattened normal.
+  const asphalt = surface(asphaltTex, new THREE.Color(1, 1, 1));
+  const damp = smoothstep(0.18, 0.42, mx_fractal_noise_float(positionWorld.xz.mul(0.075), 4, 2.0, 0.55));
+  const aArm = texture(asphaltTex.arm);
+  asphalt.colorNode = texture(asphaltTex.color).rgb.mul(macro(0.06, 0.16)).mul(mix(float(1), float(0.62), damp));
+  asphalt.roughnessNode = mix(aArm.g, float(0.34), damp);
+  asphalt.normalNode = normalMap(texture(asphaltTex.normal), vec2(mix(float(1), float(0.35), damp)));
 
-  // Accent + pillar keep distinct solid colours but borrow surface relief for detail.
-  const accent = new THREE.MeshStandardMaterial({
-    color: 0xc85a3c,
-    normalMap: wallTex.normalMap,
-    roughnessMap: wallTex.roughnessMap,
-    roughness: 0.9,
-    metalness: 0.1,
-  });
-  const pillar = new THREE.MeshStandardMaterial({
-    color: 0x9aa2ad,
-    normalMap: wallTex.normalMap,
-    roughnessMap: wallTex.roughnessMap,
-    roughness: 1,
-    metalness: 0,
-  });
+  const sidewalk = surface(sidewalkTex, new THREE.Color(0.92, 0.9, 0.86));
 
-  return { floor, wall, crate, accent, pillar };
+  // Cast concrete: dirt splash line near the ground on vertical faces.
+  const concrete = surface(concreteTex, new THREE.Color(0.96, 0.95, 0.92));
+  const grime = smoothstep(0.0, 0.85, positionWorld.y).mul(0.42).add(0.58);
+  concrete.colorNode = texture(concreteTex.color)
+    .rgb.mul(vec3(0.96, 0.95, 0.92))
+    .mul(macro(0.21, 0.12))
+    .mul(grime);
+
+  return { asphalt, sidewalk, concrete };
 }

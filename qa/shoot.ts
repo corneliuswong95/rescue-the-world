@@ -26,20 +26,20 @@ import path from 'node:path';
 const BASE_URL = process.env.BASE_URL ?? 'http://localhost:5173';
 const LABEL = process.env.LABEL ?? 'adhoc';
 const OUT_DIR = path.resolve('shots', LABEL);
-const READY_TIMEOUT = 30_000;
-const SETTLE_MS = 400; // let the scene render a few frames after switching state
+const READY_TIMEOUT = 60_000;
+// Let the scene render enough frames after switching state for TRAA + temporal GTAO to
+// converge (headless WebGL renders only a few frames per second).
+const SETTLE_MS = Number(process.env.SETTLE_MS ?? 2500);
 
 async function main(): Promise<void> {
   await mkdir(OUT_DIR, { recursive: true });
 
+  // ANGLE backend per platform: Vulkan on Linux/CI, Metal on macOS (Vulkan is unavailable
+  // there and silently drops to the SwiftShader software rasteriser).
+  const angle = process.platform === 'darwin' ? ['--use-angle=metal'] : ['--enable-features=Vulkan', '--use-angle=vulkan'];
   const browser = await chromium.launch({
     headless: true,
-    args: [
-      '--enable-unsafe-webgpu',
-      '--enable-features=Vulkan',
-      '--use-angle=vulkan',
-      '--ignore-gpu-blocklist',
-    ],
+    args: ['--enable-unsafe-webgpu', ...angle, '--ignore-gpu-blocklist'],
   });
 
   const page = await browser.newPage({

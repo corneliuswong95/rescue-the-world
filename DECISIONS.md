@@ -47,3 +47,26 @@ bot pathing.
 Consequences: One-time cost at boot (negligible for this room). When real authored levels land
 in M4 we move to the offline bake + import path per PLAN §8; runtime generation stays as the
 fallback for dynamic geometry only.
+
+## 2026-10-17 — Realism pass: HDRI-driven lighting, TRAA post stack, kit-built level
+
+Context: User asked for a much more realistic look ("same level as Call of Duty"). Literal CoD
+parity stays an anti-goal (CLAUDE.md); this pass chases the measurable AAA-*feeling* bar instead.
+Decision:
+- **Lighting:** one sun, extracted from the HDRI (direction + colour), then clamped out of the
+  IBL copy so shadows aren't re-lit by unshadowable environment light. Sky yawed to art-direct the
+  sun azimuth. Exponential height haze with sun-tinted forward scattering (`scene.fogNode`).
+- **Post (PLAN §4 node pipeline, unchanged stack):** MRT (colour/normal/velocity) → GTAO
+  (half-res, temporal) → HDR bloom → **TRAA** (replaces FXAA) → explicit tone map → display-space
+  grade (S-curve, split-tone, saturation, sharpen, vignette, grain). `outputColorTransform=false`.
+- **Level:** greybox replaced by "Foundry Yard", assembled from Poly Haven's CC0 modular factory
+  facade kit + photoscanned props, GPU-instanced; code-built ground/docks use world-scaled UVs
+  merged per material. Gameplay layout kept close to the M4 greybox.
+- **Asset encoding:** glTF → `gltf-transform optimize` (meshopt + **WebP** textures, simplification
+  on heavy scans) via `tools/assets/build.py`. KTX2 is still the target per PLAN §8 but needs
+  KTX-Software (`toktx`) on the build machine; at the current asset set GPU memory is well under
+  budget (1K prop textures, 2K ground). Backlogged.
+- **tsconfig `typeRoots`** pinned to the app's own `node_modules/@types`: tsc otherwise walks
+  ancestor folders and hung on an iCloud-evicted `@types` file outside the repo.
+Consequences: Asset download ≈ 25 MB (models 11 MB, textures 9 MB, HDRI 5 MB) — inside the < 5 s
+broadband target but worth watching. Swapping the HDRI automatically re-aims the sun.

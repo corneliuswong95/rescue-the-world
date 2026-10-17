@@ -4,3 +4,5 @@ dist/
 .DS_Store
 qa/shots/**/*.png
 !qa/shots/.gitkeep
+tools/assets/.cache/
+.claude/worktrees/

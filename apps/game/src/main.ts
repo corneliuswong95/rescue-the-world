@@ -10,11 +10,12 @@ import { createRenderer } from './engine/renderer';
 import { createStatsOverlay } from './engine/stats';
 import { createFixedLoop } from './engine/loop';
 import { setupEnvironment } from './engine/environment';
+import { applyHaze, createSun } from './engine/atmosphere';
 import { createPost } from './engine/post';
 import { initPhysics, createPhysicsWorld } from './physics/world';
 import { Input } from './input/input';
 import { Player } from './player/player';
-import { buildGreybox } from './level/greybox';
+import { buildLevel, loadLevelAssets } from './level/compound';
 import { loadLevelMaterials } from './level/materials';
 import { DecalPool } from './weapons/decals';
 import { RaycastWeapon } from './weapons/weapon';
@@ -42,7 +43,6 @@ const physics = createPhysicsWorld(STEP_HZ);
 
 // --- Scene, camera, lighting ---
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0x45566b, 60, 180);
 
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, 300);
 scene.add(camera);
@@ -51,31 +51,20 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix();
 });
 
-// IBL + skybox from a real HDRI. Provides the ambient fill so the hemisphere light can be
-// gentle; the sun stays as the shadow-casting key.
-await setupEnvironment(renderer, scene);
-
-const hemi = new THREE.HemisphereLight(0xcfe0ff, 0x3a352c, 0.08);
-scene.add(hemi);
-const sun = new THREE.DirectionalLight(0xfff2e0, 2.7); // strong key → defined cast shadows
-sun.position.set(14, 20, 9);
-sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
-sun.shadow.camera.near = 1;
-sun.shadow.camera.far = 70;
-sun.shadow.camera.left = -28;
-sun.shadow.camera.right = 28;
-sun.shadow.camera.top = 28;
-sun.shadow.camera.bottom = -28;
-sun.shadow.bias = -0.0004;
-sun.shadow.normalBias = 0.03;
-sun.shadow.intensity = 1.0;
-scene.add(sun);
+// One sun for everything: extracted from the HDRI (sky + IBL), placed behind-right of the
+// player's northward spawn view so the yard reads front-lit with long diagonal shadows.
+const SUN_AZIMUTH = 0.7;
+const [sky, levelMats, levelAssets] = await Promise.all([
+  setupEnvironment(renderer, scene, SUN_AZIMUTH),
+  loadLevelMaterials(),
+  loadLevelAssets(),
+]);
+const sun = createSun(scene, sky);
+applyHaze(scene, sky);
 
 // --- World + navmesh ---
-const levelMats = await loadLevelMaterials();
-const collideMeshes = buildGreybox(scene, physics.world, levelMats);
-const nav = new Navigation(collideMeshes);
+const level = buildLevel(scene, physics.world, levelMats, levelAssets);
+const nav = new Navigation(level.navMeshes);
 
 // --- Player + weapon + combat services ---
 const input = new Input(renderer.domElement);
@@ -126,11 +115,11 @@ const enemies = new EnemyManager({
   sfx: audio,
 });
 const SPAWNS: [THREE.Vector3, Archetype][] = [
-  [new THREE.Vector3(-14, 1, -11), RIFLEMAN],
-  [new THREE.Vector3(12, 1, -12), HEAVY],
-  [new THREE.Vector3(-5, 1, -3), RUSHER],
-  [new THREE.Vector3(9, 1, 5), RIFLEMAN],
-  [new THREE.Vector3(-16, 1, -12), RUSHER],
+  [new THREE.Vector3(-16, 2.1, -10), RIFLEMAN], // west loading dock
+  [new THREE.Vector3(13.5, 1, -15), HEAVY],
+  [new THREE.Vector3(-3, 1, -1.5), RUSHER],
+  [new THREE.Vector3(17, 2.1, 4), RIFLEMAN], // east loading dock
+  [new THREE.Vector3(-11, 1, -16), RUSHER],
 ];
 let totalEnemies = 0;
 function spawnEnemies(): void {
@@ -156,6 +145,7 @@ type GameState = 'menu' | 'playing' | 'paused' | 'won' | 'lost';
 let gameState: GameState = 'menu';
 let missionTime = 0;
 let qaFreeze = false; // QA-only: freeze sim + VFX decay so transient effects persist into a capture
+let qaAim = false; // QA-only: hold aim-down-sights without input
 
 function lockPointer(): void {
   try {
@@ -172,6 +162,7 @@ function startGame(): void {
   player.respawn(spawn);
   missionTime = 0;
   qaFreeze = false;
+  qaAim = false;
   gameState = 'playing';
   hud.setMessage(null);
   menus.hideAll();
@@ -226,18 +217,14 @@ let usePost = true;
 function applyQuality(q: Quality): void {
   if (q === 'low') {
     renderer.setPixelRatio(1);
-    sun.castShadow = false;
+    sun.setShadowQuality(null);
     usePost = false;
   } else {
-    const pr = q === 'high' ? 2 : 1.5;
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, pr));
-    sun.castShadow = true;
-    const m = q === 'high' ? 2048 : 1024;
-    sun.shadow.mapSize.set(m, m);
-    if (sun.shadow.map) {
-      sun.shadow.map.dispose();
-      sun.shadow.map = null; // force a rebuild at the new resolution
-    }
+    // TRAA resolves sub-pixel detail, so 1.5× is the high-tier ceiling (2× on a retina panel
+    // would quadruple fill cost for little visible gain).
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, q === 'high' ? 1.5 : 1));
+    sun.setShadowQuality(q === 'high' ? 4096 : 2048);
+    post.setQuality(q);
     usePost = true;
   }
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -278,7 +265,7 @@ const loop = createFixedLoop(STEP_HZ, {
       active ? fi.firePressed : 0,
       active && fi.fireHeld,
       active && input.isDown('KeyR'),
-      active && fi.aimHeld,
+      active && (fi.aimHeld || qaAim),
     );
     const wantFov = 70 - 18 * weapon.adsFactor;
     if (Math.abs(camera.fov - wantFov) > 0.05) {
@@ -340,6 +327,27 @@ installQaHooks({
       startGame();
       player.setPose(14, 0.9, 13, yawToward(-1, -1), -0.12);
       player.updateCamera(1, 0, 0);
+    },
+    // Wide establishing shot: buildings, skyline, sky/sun agreement.
+    vista: () => {
+      startGame();
+      player.setPose(-6, 0.9, 15.5, yawToward(0.55, -1), 0.06);
+      player.updateCamera(1, 0, 0);
+    },
+    // Toward the west loading dock + ramp: concrete, props, shadowed facade.
+    dock: () => {
+      startGame();
+      player.setPose(4, 0.9, 1, yawToward(-1, -0.55), -0.05);
+      player.updateCamera(1, 0, 0);
+    },
+    // Aim-down-sights sight picture on a target.
+    ads: () => {
+      startGame();
+      const from = new THREE.Vector3(0, 0.9, 8);
+      player.setPose(from.x, from.y, from.z, Math.PI, 0);
+      player.eye(_qaEye);
+      if (enemies.nearestAlive(_qaEye, _qaTmp)) aimAt(from, _qaTmp);
+      qaAim = true;
     },
     combat: () => {
       startGame();

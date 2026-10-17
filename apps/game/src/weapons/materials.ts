@@ -43,12 +43,21 @@ import {
 type F = THREE.Node<'float'>;
 type V3 = THREE.Node<'vec3'>;
 
+/**
+ * `mask` attribute values: 0 … 1 = bevel/edge (wear) weight; KNURL = knurled grip surface
+ * (turret caps, dials, buttons) drawn as a procedural knurl instead of modelled stripes.
+ */
+export const KNURL = 2;
+
 const tint = attribute<'vec3'>('color', 'vec3');
 const mask = attribute<'float'>('mask', 'float');
+const knurl = mask.sub(1).clamp(0, 1);
+const edgeMask = mask.min(1).mul(float(1).sub(knurl));
 const P = positionLocal;
 
-/** Specular scale for coated (dielectric) finishes: ~half the default reflection. */
-const COATING_SPECULAR = 0.5;
+/** Specular scale for coated (dielectric) finishes: well under the default so sky-facing
+ * faces read as dark satin, not grey mirror. */
+const COATING_SPECULAR = 0.32;
 
 /** World-space size of one pixel at the shaded point (metres). */
 const footprint = (): F => max(positionView.dFdx().length(), positionView.dFdy().length());
@@ -79,7 +88,14 @@ function bumpNormal(height: F): V3 {
 /** Noise-broken edge wear (0 … 1) on masked bevels: long rubbed patches, never a dashed line. */
 function edgeWear(scale: number): F {
   const n = mx_fractal_noise_float(P.mul(scale), 2, 2.0, 0.5);
-  return mask.mul(smoothstep(-0.18, 0.22, n));
+  return edgeMask.mul(smoothstep(-0.18, 0.22, n));
+}
+
+/** Diamond knurl height (~0.9 mm pitch) on KNURL surfaces, faded once sub-pixel. */
+function knurlRelief(): F {
+  const k = (Math.PI * 2) / 0.0009;
+  const s = sin(P.mul(k));
+  return s.x.mul(s.y).mul(s.z).mul(0.00004).mul(knurl).mul(resolve(0.0009));
 }
 
 /** Roughness variation ≈ ±0.12: broad finish blotching + centimetre handling marks. */
@@ -105,11 +121,12 @@ function coatedMetal(spec: CoatingSpec): THREE.MeshPhysicalNodeMaterial {
   const m = new THREE.MeshPhysicalNodeMaterial();
   const wear = edgeWear(spec.wearScale);
   const tone = mx_fractal_noise_float(P.mul(12), 2, 2, 0.5);
-  m.colorNode = mix(tint.mul(tone.mul(0.12).add(1)), spec.bare, wear);
-  m.roughnessNode = mix(roughnessVariation().add(spec.roughness), float(0.35), wear);
+  // Knurled bands: rougher and a touch darker than the smooth anodise around them.
+  m.colorNode = mix(tint.mul(tone.mul(0.12).add(1)).mul(knurl.mul(-0.2).add(1)), spec.bare, wear);
+  m.roughnessNode = mix(roughnessVariation().add(spec.roughness).add(knurl.mul(0.12)), float(0.35), wear);
   m.metalnessNode = wear;
   m.specularIntensityNode = float(COATING_SPECULAR);
-  m.normalNode = bumpNormal(spec.relief);
+  m.normalNode = bumpNormal(spec.relief.add(knurlRelief()));
   return m;
 }
 
@@ -117,20 +134,20 @@ function anodisedAluminium(): THREE.MeshPhysicalNodeMaterial {
   // Bead-blast texture (~2 mm) + faint machining waviness (~7 mm).
   const blast = mx_noise_float(P.mul(480)).mul(0.000032).mul(resolve(0.0021));
   const wave = mx_noise_float(P.mul(140)).mul(0.00005).mul(resolve(0.007));
-  return coatedMetal({ roughness: 0.57, bare: vec3(0.46, 0.47, 0.5), wearScale: 22, relief: blast.add(wave) });
+  return coatedMetal({ roughness: 0.7, bare: vec3(0.46, 0.47, 0.5), wearScale: 22, relief: blast.add(wave) });
 }
 
 function phosphateSteel(): THREE.MeshPhysicalNodeMaterial {
   // Crystalline phosphate (~1.5 mm) over a slightly hammered forging.
   const crystals = mx_worley_noise_float(P.mul(650)).mul(0.000028).mul(resolve(0.0015));
   const forge = mx_noise_float(P.mul(120)).mul(0.00005).mul(resolve(0.008));
-  return coatedMetal({ roughness: 0.62, bare: vec3(0.42, 0.42, 0.44), wearScale: 30, relief: crystals.add(forge) });
+  return coatedMetal({ roughness: 0.68, bare: vec3(0.42, 0.42, 0.44), wearScale: 30, relief: crystals.add(forge) });
 }
 
 function texturedPolymer(): THREE.MeshPhysicalNodeMaterial {
   const m = new THREE.MeshPhysicalNodeMaterial();
   const tone = mx_fractal_noise_float(P.mul(13), 2, 2, 0.5);
-  const polish = mask.mul(smoothstep(-0.1, 0.3, mx_noise_float(P.mul(60)))); // handled edges
+  const polish = edgeMask.mul(smoothstep(-0.1, 0.3, mx_noise_float(P.mul(60)))); // handled edges
   m.colorNode = tint.mul(tone.mul(0.08).add(1)).mul(polish.mul(0.3).add(1));
   m.roughnessNode = roughnessVariation().add(0.7).sub(polish.mul(0.2));
   m.metalnessNode = float(0);
@@ -182,8 +199,10 @@ function sleeveFabric(): THREE.MeshPhysicalNodeMaterial {
   m.colorNode = c.mul(fade.mul(0.14).add(1)).mul(fibre.mul(0.05).add(1)).mul(grid.mul(0.08).add(1)).mul(tint);
   m.roughnessNode = float(0.9);
   m.metalnessNode = float(0);
-  const wrinkle = mx_fractal_noise_float(P.mul(45), 2, 2, 0.5).mul(0.0005);
-  m.normalNode = bumpNormal(grid.mul(0.00002).add(wrinkle));
+  // Two wrinkle scales: soft creases (~5 cm) and fine crumple (~2 cm).
+  const crease = mx_fractal_noise_float(P.mul(18), 2, 2, 0.5).mul(0.0018);
+  const crumple = mx_fractal_noise_float(P.mul(48), 2, 2, 0.5).mul(0.0006);
+  m.normalNode = bumpNormal(grid.mul(0.00002).add(crease).add(crumple));
   m.sheenNode = c.mul(0.8);
   m.sheenRoughnessNode = float(0.7);
   return m;
@@ -201,7 +220,7 @@ function opticGlass(): THREE.MeshPhysicalNodeMaterial {
     roughness: 0.03,
     metalness: 0,
     ior: 1.52,
-    iridescence: 0.85,
+    iridescence: 0.3,
     iridescenceIOR: 1.35,
     iridescenceThicknessRange: [260, 420],
   });
@@ -209,15 +228,18 @@ function opticGlass(): THREE.MeshPhysicalNodeMaterial {
   const axis = modelViewMatrix.mul(vec4(0, 0, -1, 0)).xyz.normalize();
   const off = cross(viewDir, axis).length(); // sin(angle) — precise at tiny angles
   const facing = smoothstep(0.9, 0.95, viewDir.dot(axis));
-  const r = 0.0019; // dot radius (rad): a crisp ~5 px core at 1080p / 46° ADS
+  const r = 0.0035; // dot radius (rad): ~9 px across at 1080p / 46° ADS
   const aa = max(off.fwidth(), 0.00004);
   const core = float(1).sub(smoothstep(float(r).sub(aa), float(r).add(aa), off)).mul(facing);
-  const glow = exp(off.sub(r).max(0).mul(-1 / 0.0007)).mul(facing);
-  m.colorNode = vec3(0.03, 0.05, 0.05);
-  // #ff2a1a in linear. Kept below the level where ACES rolls saturated red over to orange; the
-  // authored halo supplies the bloom-like bleed.
-  m.emissiveNode = vec3(1.0, 0.016, 0.008).mul(core.mul(2.8).add(glow.mul(0.9)));
-  m.opacityNode = max(float(0.16), max(core, glow.mul(0.7)));
+  const edge = exp(off.sub(r).max(0).mul(-1 / 0.0006)).mul(facing); // ~2 px soft edge
+  const halo = exp(off.sub(r).max(0).mul(-1 / 0.003)).mul(facing); // authored bloom
+  m.colorNode = vec3(0.02, 0.03, 0.03);
+  // Pure linear red at ~2.6 tone-maps (ACES, exposure 0.9) to ≈ #ff2a1a. Much brighter and
+  // ACES desaturates it toward orange/white; and the luminance-thresholded scene bloom only
+  // catches pure red at ~7.5 — so the bloom halo is authored here instead. Components stay
+  // ≥ 0: TRAA clamps negatives, so an "anti-ACES" bias would not survive anyway.
+  m.emissiveNode = vec3(1.0, 0.0, 0.0).mul(core.mul(2.6).add(edge.mul(1.4)).add(halo.mul(0.35)));
+  m.opacityNode = max(float(0.14), max(core, edge.mul(0.8).add(halo.mul(0.25))));
   return m;
 }
 

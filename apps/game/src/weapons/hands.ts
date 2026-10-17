@@ -303,7 +303,8 @@ type FoldFn = (th: number, s: number) => number;
 
 /**
  * Lathed tube along `axis` from `start` with radius profile [(r, s)], an oval cross-section
- * aligned to `lateral` (minor axis scaled by `flatten`), displaced by `fold`. Rifle space.
+ * aligned to `lateral` (minor axis scaled by `flatten`), displaced by `fold`. Fold valleys get
+ * baked occlusion (`foldAO` = darkening per metre of inward fold) so creases read. Rifle space.
  */
 function clothTube(
   start: THREE.Vector3,
@@ -312,21 +313,26 @@ function clothTube(
   flatten: number,
   profile: readonly (readonly [number, number])[],
   fold: FoldFn,
+  foldAO = 0,
 ): THREE.BufferGeometry {
   const g = new THREE.LatheGeometry(
     profile.map(([r, s]) => new THREE.Vector2(r, s)),
     40,
   );
   const pos = g.getAttribute('position') as THREE.BufferAttribute;
+  const ao = new Float32Array(pos.count).fill(1);
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i);
     const s = pos.getY(i);
     const z = pos.getZ(i);
     const r = Math.hypot(x, z);
     if (r < 1e-5) continue;
-    const k = (r + fold(Math.atan2(x, z), s)) / r;
+    const f = fold(Math.atan2(x, z), s);
+    ao[i] = THREE.MathUtils.clamp(1 + f * foldAO, 0.55, 1.1);
+    const k = (r + f) / r;
     pos.setXYZ(i, x * k, s, z * k * flatten);
   }
+  if (foldAO > 0) g.setAttribute('ao', new THREE.BufferAttribute(ao, 1));
   g.computeVertexNormals();
   const geo = creased(g.toNonIndexed(), 70);
   g.dispose();
@@ -368,12 +374,15 @@ function sleeveFolds(seed: number): FoldFn {
   return (th, s) => {
     const bunch = THREE.MathUtils.smoothstep(s, 0.04, 0.07) * (1 - THREE.MathUtils.smoothstep(s, 0.13, 0.21));
     const ring = Math.max(0, Math.sin(s * 85 + th * 0.6 + seed));
+    // Sharp-crested drape folds (|sin| creases) read as cloth, not a smooth sausage.
+    const drape = 1 - 2 * Math.abs(Math.sin(th * 1.5 + s * 11 + seed));
     return (
-      0.0045 * bunch * ring * ring +
-      0.003 * Math.sin(th * 3 + s * 22 + seed) +
-      0.0018 * Math.sin(th * 5 - s * 40 + seed * 2.1) +
+      0.006 * bunch * ring * ring +
+      0.0042 * Math.sin(th * 3 + s * 22 + seed) +
+      0.0026 * drape +
+      0.0016 * Math.sin(th * 5 - s * 40 + seed * 2.1) +
       0.0009 * Math.sin(th * 9 + s * 70 + seed * 0.7) +
-      0.0025 * THREE.MathUtils.smoothstep(s, 0.22, 0.36) * Math.sin(th * 2 + s * 30 + seed * 1.3)
+      0.003 * THREE.MathUtils.smoothstep(s, 0.22, 0.36) * Math.sin(th * 2 + s * 30 + seed * 1.3)
     );
   };
 }
@@ -426,7 +435,7 @@ export function createArm(spec: HandSpec): Arm {
 
   // Sleeve: turned hem over the cuff, cuff band + seam, tapering out to the elbow.
   const start = wrist.clone().addScaledVector(fa, 0.03);
-  const tube = clothTube(start, fa, lateral, 0.82, sleeveProfile(), sleeveFolds(spec.mirror ? 4.2 : 0.6));
+  const tube = clothTube(start, fa, lateral, 0.82, sleeveProfile(), sleeveFolds(spec.mirror ? 4.2 : 0.6), 60);
   sb.add(mats.sleeve, tube.applyMatrix4(toLocal), 0xffffff);
 
   // Hook-and-loop cuff tab on the back of the wrist.

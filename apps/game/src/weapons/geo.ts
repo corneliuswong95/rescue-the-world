@@ -179,31 +179,6 @@ export function lathe(profile: readonly V2[], o: LatheOpts = {}): THREE.BufferGe
   return g;
 }
 
-/**
- * Cylinder (along +y) with alternate facets pushed in — knurled turret caps / dials.
- */
-export function ridged(radius: number, height: number, ridges: number, depth: number): THREE.BufferGeometry {
-  const seg = ridges * 2;
-  const geo = new THREE.CylinderGeometry(radius, radius, height, seg, 1).toNonIndexed();
-  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
-  const step = (Math.PI * 2) / seg;
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i);
-    const z = pos.getZ(i);
-    const r = Math.hypot(x, z);
-    if (r < radius * 0.5) continue;
-    const k = Math.round(Math.atan2(x, z) / step);
-    if (((k % 2) + 2) % 2 === 1) {
-      const s = (radius - depth) / r;
-      pos.setXYZ(i, x * s, pos.getY(i), z * s);
-    }
-  }
-  geo.computeVertexNormals();
-  const g = creased(geo, 30);
-  flagEdges(g, new THREE.Vector3(0, 1, 0), 0.15);
-  return g;
-}
-
 // ---------------------------------------------------------------------------------------------
 // Attribute bakes
 // ---------------------------------------------------------------------------------------------

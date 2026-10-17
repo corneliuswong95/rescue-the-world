@@ -20,10 +20,10 @@ import { createRifle, RIFLE_POINTS } from './rifle';
 import { createArm, handRotation, wristFor, type HandSpec } from './hands';
 
 /**
- * Eye → optic centre at full ADS (m): the rear-aperture window fills ~30% of screen height at
- * the ~46° ADS field of view, and the rear ring stays well beyond the 0.05 m near plane.
+ * Eye → optic centre at full ADS (m): the housing stays well under a quarter of the screen
+ * width at the ~46° ADS field of view, leaving a clear field around the target.
  */
-const EYE_RELIEF = 0.104;
+const EYE_RELIEF = 0.24;
 
 const smooth = (t: number, a: number, b: number): number => {
   const x = THREE.MathUtils.clamp((t - a) / (b - a), 0, 1);
@@ -49,15 +49,19 @@ const RIGHT_HAND: HandSpec = {
   forearm: v(0.42, -0.5, 0.76),
 };
 
-/** Left hand: palm under the handguard, fingers wrapping up the far side, thumb along the near side. */
+/**
+ * Left hand, forward on the handguard: heel of the palm under it, wrist below-left (so the
+ * forearm drops away instead of hiding the hand), fingers wrapped up the far side and over the
+ * top, thumb pointing forward along the near side.
+ */
 const LEFT_HAND: HandSpec = {
   mirror: true,
-  gripPoint: v(0, -0.003, -0.29),
+  gripPoint: v(0, -0.003, -0.34),
   across: v(0, 0, -1),
-  dorsal: v(-0.6, -0.8, 0),
+  dorsal: v(0.35, -0.94, 0),
   grip: { y: 0.062, z: -0.04, radius: 0.024 },
-  thumb: { dir: v(0.35, 0.12, -0.93), curl: v(0.9, 0.2, 0), flex: [0.12, 0.15] },
-  forearm: v(-0.55, -0.55, 0.62),
+  thumb: { dir: v(0.2, 0.3, -0.93), curl: v(0.9, 0.15, 0), flex: [0.12, 0.15] },
+  forearm: v(-0.42, -0.66, 0.62),
 };
 
 const ELBOW_REACH = 0.3;
@@ -67,6 +71,9 @@ const ELBOW_FOLLOW = 0.6;
 const MAG_GRAB = { point: v(0, -0.085, -0.004), across: v(0, 1, 0), dorsal: v(-1, 0, 0.15) };
 /** Wrist shift from the mag grip to the bolt catch (thumb on the paddle), rifle space. */
 const BOLT_REACH = v(-0.006, 0.05, 0.028);
+
+/** Reload sound cues (seconds into the reload), aligned with the animation beats below. */
+export const RELOAD_SFX = { magIn: 1.07, slap: 1.19, bolt: 1.52 } as const;
 
 /** Reload beats (seconds). */
 const BEAT = {
@@ -89,10 +96,30 @@ const EMPTY_BEAT = {
   tiltOut: [1.86, 2.2],
 } as const;
 
+/** Per-frame pose inputs (filled in place by the weapon — no per-frame allocation). */
+export interface ViewmodelState {
+  /** 0 hip … 1 aimed. */
+  ads: number;
+  /** 0 … 1 recoil impulse (decays in the weapon). */
+  kick: number;
+  /** Camera recoil roll (rad) — the gun rolls with it, a little more. */
+  roll: number;
+  /** Seconds into the current reload, or < 0 when not reloading. */
+  reload: number;
+  /** The current reload is from empty (adds the bolt-release beat). */
+  empty: boolean;
+  /** 0 clear … 1 muzzle against a wall (pull back + dip). */
+  obstruct: number;
+  /** 0 ready … 1 sprinting (rifle canted low). */
+  sprint: number;
+}
+
 export class Viewmodel {
   readonly root = new THREE.Group();
   /** Muzzle tip anchor (child of the rifle) — flash / tracer origin. */
   readonly muzzle = new THREE.Object3D();
+  /** Ejection port anchor (child of the rifle, right side) — brass origin; +x is outboard. */
+  readonly ejectionPort = new THREE.Object3D();
 
   readonly hipPos = new THREE.Vector3(0.13, -0.15, -0.32);
   readonly hipRot = new THREE.Euler(0.025, 0.1, 0.05);
@@ -122,7 +149,8 @@ export class Viewmodel {
     if (!rifle.magazine) throw new Error('viewmodel rifle must expose its magazine');
     this.mag = rifle.magazine;
     this.muzzle.position.copy(rifle.muzzle);
-    this.rifle.add(this.muzzle);
+    this.ejectionPort.position.copy(RIFLE_POINTS.ejectionPort);
+    this.rifle.add(this.muzzle, this.ejectionPort);
     this.root.add(this.rifle);
 
     const right = createArm(RIGHT_HAND);
@@ -151,15 +179,8 @@ export class Viewmodel {
     });
   }
 
-  /**
-   * @param ads      0 hip … 1 aimed
-   * @param kick     0 … 1 recoil impulse (decays in the weapon)
-   * @param roll     camera recoil roll (rad) — the gun rolls with it, a little more
-   * @param reload   seconds into the current reload, or < 0 when not reloading
-   * @param empty    the current reload is from empty (adds the bolt-release beat)
-   * @param obstruct 0 clear … 1 muzzle against a wall (pull back + lower)
-   */
-  update(dt: number, ads: number, kick: number, roll: number, reload: number, empty: boolean, obstruct: number): void {
+  update(dt: number, state: Readonly<ViewmodelState>): void {
+    const { ads, kick, roll, reload, empty, obstruct, sprint } = state;
     this.time += dt;
     const t = this.time;
     const aim = ads * (1 - obstruct);
@@ -188,14 +209,18 @@ export class Viewmodel {
     // Wall: pull back and dip the muzzle (dip leads the pull-back) so the part of the gun that
     // would meet the wall drops out of frame while the receiver and hands stay in view.
     const dip = Math.min(1, obstruct * 1.6);
-    pos.x += bx - 0.045 * tilt - 0.01 * obstruct;
-    pos.y += by + 0.08 * tilt + 0.006 * jolt + 0.01 * obstruct;
-    pos.z += kick * 0.045 * (1 - 0.55 * aim) + 0.06 * tilt + 0.13 * obstruct;
+    // Sprint: rifle canted ~35°, carried ~8 cm lower and pulled in, muzzle slightly down,
+    // with a running bob.
+    const runY = Math.sin(t * 10) * 0.008 * sprint;
+    const runX = Math.cos(t * 5) * 0.006 * sprint;
+    pos.x += bx - 0.045 * tilt - 0.01 * obstruct - 0.045 * sprint + runX;
+    pos.y += by + 0.08 * tilt + 0.006 * jolt + 0.01 * obstruct - 0.03 * sprint + runY;
+    pos.z += kick * 0.045 * (1 - 0.55 * aim) + 0.06 * tilt + 0.13 * obstruct + 0.05 * sprint;
 
     this.root.rotation.set(
-      this.hipRot.x * hip + kick * 0.16 * (1 - 0.6 * aim) + br * 0.5 + 0.16 * tilt + 0.05 * jolt - 0.55 * dip,
-      this.hipRot.y * hip + bx * 0.6 - 0.1 * tilt + 0.15 * dip,
-      this.hipRot.z * hip + br - 0.42 * tilt + roll * 1.6 + 0.22 * dip,
+      this.hipRot.x * hip + kick * 0.16 * (1 - 0.6 * aim) + br * 0.5 + 0.16 * tilt + 0.05 * jolt - 0.55 * dip - 0.12 * sprint,
+      this.hipRot.y * hip + bx * 0.6 - 0.1 * tilt + 0.15 * dip + 0.3 * sprint,
+      this.hipRot.z * hip + br - 0.42 * tilt + roll * 1.6 + 0.22 * dip + 0.61 * sprint,
     );
 
     // Magazine: unseat, pull ~0.12 m, twist for the swap, lift, insert.

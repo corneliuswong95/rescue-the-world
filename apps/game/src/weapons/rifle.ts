@@ -19,7 +19,6 @@ import {
   lathe,
   long,
   place,
-  ridged,
   rrect,
   shape,
   side,
@@ -28,7 +27,7 @@ import {
   type ExtrudeOpts,
   type V2,
 } from './geo';
-import { getViewmodelMaterials, getWorldMaterials } from './materials';
+import { getViewmodelMaterials, getWorldMaterials, KNURL } from './materials';
 
 export type RifleDetail = 'viewmodel' | 'world';
 
@@ -46,6 +45,8 @@ export const RIFLE_POINTS = {
   /** Centre of the optic window — the ADS pose puts the eye on this line. */
   opticCenter: new THREE.Vector3(0, 0.054, -0.032),
   magPivot: new THREE.Vector3(0, -0.006, -0.0995),
+  /** Ejection port (right side, behind the dust cover) — brass leaves here. */
+  ejectionPort: new THREE.Vector3(0.0145, 0.0, -0.068),
 } as const;
 
 const DEG = Math.PI / 180;
@@ -57,8 +58,8 @@ const TINT = {
   steel: 0x232422,
   poly: 0x1e1f21,
   rubber: 0x141414,
-  fde: 0x6a5b44,
-  fdeDark: 0x54483a,
+  mag: 0x26272a,
+  magPlate: 0x1d1e20,
 };
 
 interface Palette {
@@ -227,7 +228,7 @@ function addMagazine(b: Batch, mat: THREE.Material, lod: Lod, offset: V2 = [0, 0
     rear.push(magPoint(s, half, 0, r));
   }
   const body = side([...front, ...rear.reverse()], 0.0222, lod.o(0.0016, 2));
-  b.add(mat, body.translate(0, offset[1], offset[0]), TINT.fde);
+  b.add(mat, body.translate(0, offset[1], offset[0]), TINT.mag);
 
   // Flared floor plate.
   const L = MAG_LEN;
@@ -241,7 +242,7 @@ function addMagazine(b: Batch, mat: THREE.Material, lod: Lod, offset: V2 = [0, 0
     0.0262,
     lod.o(0.0016, 2),
   );
-  b.add(mat, plate.translate(0, offset[1], offset[0]), TINT.fdeDark);
+  b.add(mat, plate.translate(0, offset[1], offset[0]), TINT.magPlate);
 
   if (!lod.hi) return;
   // Moulded grip ribs on both flanks near the base.
@@ -256,7 +257,7 @@ function addMagazine(b: Batch, mat: THREE.Material, lod: Lod, offset: V2 = [0, 0
       0.0232,
       lod.o(0.0004),
     );
-    b.add(mat, rib.translate(0, offset[1], offset[0]), TINT.fde);
+    b.add(mat, rib.translate(0, offset[1], offset[0]), TINT.mag);
   }
 }
 
@@ -443,7 +444,7 @@ function addControls(b: Batch, M: Palette, lod: Lod): void {
     [-0.004, -0.025, 0.0024],
     [0.016, -0.023, 0.0024],
   ] as const) {
-    b.add(M.steel, place(new THREE.CylinderGeometry(r, r, 0.0251, 18), 0, y, z, 0, 0, Math.PI / 2), TINT.steel);
+    b.add(M.steel, place(new THREE.CylinderGeometry(r, r, 0.0251, 24), 0, y, z, 0, 0, Math.PI / 2), TINT.steel);
   }
 
   // Selector (left): hub + lever in FIRE (pointing up-rear).
@@ -477,7 +478,7 @@ function addControls(b: Batch, M: Palette, lod: Lod): void {
     ),
     TINT.alu,
   );
-  b.add(M.steel, place(new THREE.CylinderGeometry(0.0046, 0.0046, 0.0045, 20), 0.0135, -0.041, -0.051, 0, 0, Math.PI / 2), TINT.steel);
+  b.add(M.steel, place(new THREE.CylinderGeometry(0.0046, 0.0046, 0.0045, 24), 0.0135, -0.041, -0.051, 0, 0, Math.PI / 2), TINT.steel);
 
   // Right side: dust cover (closed) on its hinge rod, brass deflector, forward assist.
   b.add(
@@ -515,12 +516,12 @@ function addControls(b: Batch, M: Palette, lod: Lod): void {
   );
   const fa = new THREE.Group();
   const housing = place(new THREE.CylinderGeometry(0.0072, 0.0078, 0.026, 24), 0, 0, 0, Math.PI / 2);
-  const button = place(ridged(0.0062, 0.009, 10, 0.0005), 0, 0, 0.016, Math.PI / 2);
+  const button = place(new THREE.CylinderGeometry(0.0062, 0.0062, 0.009, 24), 0, 0, 0.016, Math.PI / 2);
   fa.position.set(0.0128, 0.0012, 0.046);
   fa.rotation.y = 0.32;
   fa.updateMatrix();
   b.add(M.alu, housing.applyMatrix4(fa.matrix), TINT.alu);
-  b.add(M.steel, button.applyMatrix4(fa.matrix), TINT.steel);
+  b.add(M.steel, button.applyMatrix4(fa.matrix), TINT.steel, KNURL);
 }
 
 function addFrontEnd(b: Batch, M: Palette, lod: Lod): void {
@@ -566,7 +567,7 @@ function addFrontEnd(b: Batch, M: Palette, lod: Lod): void {
           [0.0128, -0.405],
           [0.0, -0.405],
         ],
-        { segments: 20 },
+        { segments: 24 },
       ),
       TINT.steel,
     );
@@ -584,7 +585,7 @@ function addFrontEnd(b: Batch, M: Palette, lod: Lod): void {
             [0.0034, -0.0012],
             [0.0, -0.0012],
           ],
-          { segments: 20, interiorAO: 0.35 },
+          { segments: 24, interiorAO: 0.35 },
         ),
         -0.0205,
         -0.002,
@@ -750,9 +751,10 @@ function addRearEnd(b: Batch, M: Palette, lod: Lod): void {
 }
 
 /**
- * Red dot with a rear-aperture window: the bore flares from the rear lip to a larger objective
- * bell, so from the ADS eye point the bore wall is seen edge-on (no grey "tunnel") and the
- * window is the rear ring itself.
+ * Red dot with a rear-aperture window: the bore flares gently from the rear lip to the
+ * objective so the bore wall is seen edge-on from the ADS eye point. Turret caps and the
+ * brightness dial are smooth cylinders flagged as knurled (`mask` = KNURL) — the material
+ * draws the knurl as a footprint-faded bump instead of geometric stripes.
  */
 function addOptic(b: Batch, M: Palette, glass: THREE.Material | null, lod: Lod): void {
   const o = lod.o;
@@ -775,7 +777,7 @@ function addOptic(b: Batch, M: Palette, glass: THREE.Material | null, lod: Lod):
   if (!lod.hi) {
     b.add(
       M.alu,
-      lathe([[0.0, -0.0135], [0.014, -0.0135], [0.014, -0.03], [0.0176, -0.045], [0.0176, -0.0507], [0.0, -0.0507]], {
+      lathe([[0.0, -0.0135], [0.014, -0.0135], [0.014, -0.03], [0.016, -0.045], [0.016, -0.0507], [0.0, -0.0507]], {
         segments: 8,
       }).translate(0, y, 0),
       TINT.alu,
@@ -805,7 +807,7 @@ function addOptic(b: Batch, M: Palette, glass: THREE.Material | null, lod: Lod):
     [-0.0075, 0.0395, 0.001],
     [0.0075, 0.0395, 0.001],
   ];
-  const rs = 0.0134;
+  const rs = 0.0132;
   const a0 = Math.asin(0.0075 / rs);
   for (let i = 0; i <= 10; i++) {
     const a = a0 - (2 * a0 * i) / 10;
@@ -813,47 +815,49 @@ function addOptic(b: Batch, M: Palette, glass: THREE.Material | null, lod: Lod):
   }
   b.add(M.alu, long(saddle, -0.029, -0.0165, o(0.0006)), TINT.alu);
 
-  // Housing: rear ring, slim body, flared objective bell; conical bore (interior darkened).
-  // 64 segments so it stays round at ADS distance.
+  // Housing: slim rear ring, body, gently flared objective; conical bore (interior darkened).
   b.add(
     M.alu,
     lathe(
       [
-        [0.0108, -0.0135],
-        [0.0128, -0.0135],
+        [0.0116, -0.0135],
+        [0.013, -0.0135],
         [0.014, -0.0145],
         [0.014, -0.0175],
-        [0.0137, -0.018],
-        [0.0137, -0.03],
-        [0.0165, -0.04],
-        [0.0172, -0.0445],
-        [0.0176, -0.045],
-        [0.0176, -0.0497],
-        [0.0168, -0.0507],
-        [0.016, -0.0507],
-        [0.011, -0.0145],
-        [0.0108, -0.0135],
+        [0.0136, -0.018],
+        [0.0136, -0.03],
+        [0.0152, -0.04],
+        [0.0157, -0.0445],
+        [0.016, -0.045],
+        [0.016, -0.0497],
+        [0.0153, -0.0507],
+        [0.0142, -0.0507],
+        [0.0118, -0.0145],
+        [0.0116, -0.0135],
       ],
-      { segments: 64, interiorAO: 0.1 },
+      { segments: 64, interiorAO: 0.05 },
     ).translate(0, y, 0),
     TINT.alu,
   );
 
-  // Turrets on the slim body: elevation (top), windage (right), brightness dial (left).
+  // Turrets on the body (×0.6 of a full-size sight): elevation (top), windage (right),
+  // brightness dial (left). Smooth 48-segment cylinders; knurl comes from the material.
   const tz = -0.024;
-  const R = 0.0137;
-  b.add(M.alu, new THREE.CylinderGeometry(0.0075, 0.0075, 0.006, 48).translate(0, y + R, tz), TINT.alu);
-  b.add(M.alu, ridged(0.0065, 0.0045, 24, 0.0003).translate(0, y + R + 0.00525, tz), TINT.alu);
-  b.add(M.alu, place(new THREE.CylinderGeometry(0.0075, 0.0075, 0.006, 48), R, y, tz, 0, 0, -Math.PI / 2), TINT.alu);
-  b.add(M.alu, place(ridged(0.0065, 0.0045, 24, 0.0003), R + 0.00525, y, tz, 0, 0, -Math.PI / 2), TINT.alu);
-  b.add(M.alu, place(new THREE.CylinderGeometry(0.0068, 0.0068, 0.004, 48), -R, y, tz, 0, 0, Math.PI / 2), TINT.alu);
-  b.add(M.alu, place(ridged(0.0088, 0.0055, 26, 0.00045), -R - 0.00475, y, tz, 0, 0, Math.PI / 2), TINT.alu);
+  const R = 0.0136;
+  const boss = (): THREE.BufferGeometry => new THREE.CylinderGeometry(0.0045, 0.0045, 0.0036, 48);
+  const cap = (): THREE.BufferGeometry => new THREE.CylinderGeometry(0.0039, 0.0039, 0.0027, 48);
+  b.add(M.alu, boss().translate(0, y + R + 0.0008, tz), TINT.alu);
+  b.add(M.alu, cap().translate(0, y + R + 0.004, tz), TINT.alu, KNURL);
+  b.add(M.alu, place(boss(), R + 0.0008, y, tz, 0, 0, -Math.PI / 2), TINT.alu);
+  b.add(M.alu, place(cap(), R + 0.004, y, tz, 0, 0, -Math.PI / 2), TINT.alu, KNURL);
+  b.add(M.alu, place(new THREE.CylinderGeometry(0.0041, 0.0041, 0.0024, 48), -R - 0.0004, y, tz, 0, 0, Math.PI / 2), TINT.alu);
+  b.add(M.alu, place(new THREE.CylinderGeometry(0.0053, 0.0053, 0.0033, 48), -R - 0.0031, y, tz, 0, 0, Math.PI / 2), TINT.alu, KNURL);
 
   // Cross-bolt: hex nut left, round head right.
   b.add(M.steel, place(new THREE.CylinderGeometry(0.0046, 0.0046, 0.004, 6), -0.0151, 0.0288, -0.029, 0, 0, Math.PI / 2), TINT.steel);
   b.add(M.steel, place(new THREE.CylinderGeometry(0.0042, 0.0042, 0.0025, 24), 0.0143, 0.0288, -0.029, 0, 0, Math.PI / 2), TINT.steel);
 
-  if (glass) b.add(glass, new THREE.CircleGeometry(0.0154, 64).translate(0, y, -0.046), 0xffffff);
+  if (glass) b.add(glass, new THREE.CircleGeometry(0.0138, 64).translate(0, y, -0.046), 0xffffff);
 }
 
 export function createRifle(detail: RifleDetail = 'world'): Rifle {

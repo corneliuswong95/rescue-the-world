@@ -1,6 +1,7 @@
 /**
- * Placeholder full-auto hitscan weapon. Feel bits: viewmodel kick, muzzle flash, shared pooled
- * tracers, view-recoil the player camera consumes. Combat: magazine + reserve ammo with reload,
+ * Full-auto hitscan carbine. Feel bits: procedural viewmodel (hip/ADS, kick, breathing sway,
+ * animated reload — see viewmodel.ts), muzzle flash, shared pooled tracers, view-recoil the
+ * player camera consumes. Combat: magazine + reserve ammo with reload,
  * damage routed through the HitRegistry (headshot multiplier), hitmarker + blood callbacks.
  * Fully pooled — no per-shot allocation.
  */
@@ -8,7 +9,7 @@ import * as THREE from 'three/webgpu';
 import { RAPIER } from '../physics/world';
 import type RAPIER_NS from '@dimforge/rapier3d-compat';
 import { DecalPool } from './decals';
-import { createRifle } from './rifle';
+import { Viewmodel } from './viewmodel';
 import type { Tracers } from '../vfx/tracers';
 import type { HitRegistry } from '../combat/hittable';
 import type { Sfx } from '../audio/audio';
@@ -64,16 +65,13 @@ export class RaycastWeapon {
   private cooldown = 0;
   private prevReload = false;
 
-  private readonly viewmodel = new THREE.Group();
-  private readonly muzzle = new THREE.Object3D();
+  /** Carbine + gloved hands (createRifle('viewmodel') inside), attached to the camera. */
+  private readonly viewmodel = new Viewmodel();
   private readonly muzzleFlash: THREE.Mesh;
   private readonly muzzleLight: THREE.PointLight;
   private flashTimer = 0;
   private kick = 0;
   private ads = 0; // 0 hip … 1 aimed
-  private readonly hipPos = new THREE.Vector3(0.17, -0.17, -0.42);
-  private readonly adsPos = new THREE.Vector3(0.0, -0.058, -0.2);
-  private readonly _vmPos = new THREE.Vector3();
 
   /** 0 (hip) … 1 (fully aimed) — the camera reads this to zoom FOV. */
   get adsFactor(): number {
@@ -82,7 +80,7 @@ export class RaycastWeapon {
 
   /** Hide the viewmodel outside of play (so it doesn't intrude on menus). */
   setVisible(visible: boolean): void {
-    this.viewmodel.visible = visible;
+    this.viewmodel.root.visible = visible;
   }
 
   // scratch
@@ -99,8 +97,7 @@ export class RaycastWeapon {
     private readonly playerCollider: RAPIER_NS.Collider,
     private readonly hooks: WeaponHooks,
   ) {
-    this.buildViewmodel();
-    this.camera.add(this.viewmodel);
+    this.camera.add(this.viewmodel.root);
 
     const flashMat = new THREE.MeshBasicMaterial({
       map: makeFlashTexture(),
@@ -112,10 +109,10 @@ export class RaycastWeapon {
     this.muzzleFlash = new THREE.Mesh(new THREE.PlaneGeometry(0.55, 0.55), flashMat);
     this.muzzleFlash.visible = false;
     this.muzzleFlash.renderOrder = 4;
-    this.muzzle.add(this.muzzleFlash);
+    this.viewmodel.muzzle.add(this.muzzleFlash);
 
     this.muzzleLight = new THREE.PointLight(0xffcf8a, 0, 9, 2);
-    this.muzzle.add(this.muzzleLight);
+    this.viewmodel.muzzle.add(this.muzzleLight);
 
     // Dim, short-range fill so the viewmodel always reads (standard FP treatment).
     const fill = new THREE.PointLight(0xdfeaff, 0.9, 1.8, 2.4);
@@ -123,21 +120,6 @@ export class RaycastWeapon {
     this.camera.add(fill);
 
     this.hooks.onAmmo(this.mag, this.reserve, false);
-  }
-
-  private buildViewmodel(): void {
-    const rifle = createRifle();
-    this.viewmodel.add(rifle.group);
-    this.viewmodel.scale.setScalar(0.9);
-    this.viewmodel.position.copy(this.hipPos);
-
-    this.muzzle.position.copy(rifle.muzzle);
-    this.viewmodel.add(this.muzzle);
-
-    this.viewmodel.traverse((o) => {
-      o.renderOrder = 5;
-      if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).castShadow = false;
-    });
   }
 
   update(
@@ -177,11 +159,8 @@ export class RaycastWeapon {
     this.recoil.yaw = THREE.MathUtils.damp(this.recoil.yaw, 0, 9, dt);
     this.kick = THREE.MathUtils.damp(this.kick, 0, 14, dt);
 
-    // Viewmodel pose = lerp(hip, ads) + recoil kick back along Z.
-    this._vmPos.lerpVectors(this.hipPos, this.adsPos, this.ads);
-    this._vmPos.z += this.kick * 0.05 * (1 - 0.6 * this.ads);
-    this.viewmodel.position.copy(this._vmPos);
-    this.viewmodel.rotation.x = this.kick * 0.18 * (1 - 0.5 * this.ads);
+    const reload = this.reloadTimer > 0 ? 1 - this.reloadTimer / RELOAD_TIME : -1;
+    this.viewmodel.update(dt, this.ads, this.kick, reload);
 
     if (this.flashTimer > 0) {
       this.flashTimer -= dt;
@@ -251,7 +230,7 @@ export class RaycastWeapon {
       endPoint = this._hit.copy(this._origin).addScaledVector(this._dir, MAX_RANGE);
     }
 
-    this.muzzle.getWorldPosition(this._muzzleWorld);
+    this.viewmodel.muzzle.getWorldPosition(this._muzzleWorld);
     this.hooks.tracers.spawn(this._muzzleWorld, endPoint);
 
     this.muzzleFlash.visible = true;

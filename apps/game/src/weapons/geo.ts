@@ -268,6 +268,14 @@ export function bakeInteriorAO(
   }
 }
 
+/** Multiplies the baked `ao` of every vertex by `factor(position)` (creases, seams). */
+export function bakeAO(geo: THREE.BufferGeometry, factor: (p: THREE.Vector3) => number): void {
+  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+  const ao = aoAttr(geo);
+  const p = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) ao.setX(i, ao.getX(i) * factor(p.fromBufferAttribute(pos, i)));
+}
+
 /** Per-vertex tint by normal direction (e.g. palm-side leather vs. back-of-hand fabric). */
 export function tintByNormal(
   geo: THREE.BufferGeometry,

@@ -16,7 +16,7 @@
  */
 import * as THREE from 'three/webgpu';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { Batch, creased, mirrorX, tintAll, tintByNormal } from './geo';
+import { Batch, bakeAO, creased, mirrorX, tintAll, tintByNormal } from './geo';
 import { getViewmodelMaterials } from './materials';
 
 const FABRIC = new THREE.Color(0x5b4b37); // coyote nylon
@@ -56,14 +56,16 @@ interface FingerSpec {
   knuckle: readonly [number, number];
   len: readonly [number, number, number];
   rad: readonly [number, number, number, number];
+  /** Natural abduction (rad) — fingers fan slightly instead of lying in parallel. */
+  splay: number;
 }
 
 // Gloved proportions (m): index, middle, ring, little. rad = MCP, PIP, DIP, tip.
 const FINGERS: readonly FingerSpec[] = [
-  { x: -0.026, knuckle: [0.088, -0.0015], len: [0.043, 0.025, 0.021], rad: [0.0089, 0.0082, 0.0076, 0.007] },
-  { x: -0.0075, knuckle: [0.092, -0.001], len: [0.047, 0.029, 0.022], rad: [0.0091, 0.0084, 0.0078, 0.0072] },
-  { x: 0.0108, knuckle: [0.089, -0.0015], len: [0.044, 0.027, 0.021], rad: [0.0087, 0.008, 0.0074, 0.0068] },
-  { x: 0.0272, knuckle: [0.081, -0.003], len: [0.035, 0.021, 0.018], rad: [0.0078, 0.0072, 0.0066, 0.0061] },
+  { x: -0.026, knuckle: [0.088, -0.0015], len: [0.043, 0.025, 0.021], rad: [0.0086, 0.0079, 0.0073, 0.0067], splay: -0.05 },
+  { x: -0.0075, knuckle: [0.092, -0.001], len: [0.047, 0.029, 0.022], rad: [0.0088, 0.0081, 0.0075, 0.0069], splay: 0 },
+  { x: 0.0108, knuckle: [0.089, -0.0015], len: [0.044, 0.027, 0.021], rad: [0.0084, 0.0077, 0.0071, 0.0065], splay: 0.045 },
+  { x: 0.0272, knuckle: [0.081, -0.003], len: [0.035, 0.021, 0.018], rad: [0.0075, 0.0069, 0.0063, 0.0058], splay: 0.1 },
 ];
 const MAX_FLEX = [1.7, 1.85, 1.35];
 
@@ -112,6 +114,7 @@ function bone(
 ): THREE.BufferGeometry {
   const len = a.distanceTo(b);
   const prof: THREE.Vector2[] = [];
+  const crease = (y: number, r: number): number => 1 - 0.28 * Math.max(0, 1 - Math.abs(y) / (r * 0.9));
   const n = 5;
   for (let i = 0; i <= n; i++) {
     const t = (-Math.PI / 2) * (1 - i / n);
@@ -125,7 +128,8 @@ function bone(
   g.scale(1, 1, 0.87);
   const geo = creased(g.toNonIndexed(), 60);
   g.dispose();
-  // Bone-local: +Y along the bone, −Z palm side.
+  // Bone-local: +Y along the bone, −Z palm side. Darken the knuckle creases at the joints.
+  bakeAO(geo, (p) => crease(p.y, r0) * (tip ? 1 : crease(p.y - len, r1)));
   tintByNormal(geo, new THREE.Vector3(0, 0, -1), 0.5, LEATHER, 1);
   if (tip) tintByNormal(geo, new THREE.Vector3(0, 1, 0), 0.45, LEATHER, 1);
   _y.subVectors(b, a).normalize();
@@ -235,7 +239,7 @@ function wrapFinger(
     pz += Math.sin(ang) * L;
     pts.push(new THREE.Vector3(f.x, py, pz));
   }
-  const spread = posed?.spread ?? 0;
+  const spread = f.splay + (posed?.spread ?? 0);
   if (spread !== 0) {
     const k = pts[0];
     for (const p of pts) p.sub(k).applyAxisAngle(AXIS_Z, spread).add(k);
@@ -251,7 +255,7 @@ function handParts(spec: HandSpec, rotation: THREE.Quaternion): THREE.BufferGeom
   FINGERS.forEach((f, i) => {
     const posed = spec.fingers?.[i as 0 | 1 | 2 | 3];
     const pts = wrapFinger(f, spec.grip, posed);
-    const lat = lateral.clone().applyAxisAngle(AXIS_Z, posed?.spread ?? 0);
+    const lat = lateral.clone().applyAxisAngle(AXIS_Z, f.splay + (posed?.spread ?? 0));
     for (let j = 0; j < 3; j++) out.push(bone(pts[j], pts[j + 1], f.rad[j], f.rad[j + 1], lat, j === 2));
     // Low knuckle pad moulded over the proximal phalanx.
     const d = pts[1].clone().sub(pts[0]).normalize();
@@ -277,8 +281,8 @@ function handParts(spec: HandSpec, rotation: THREE.Quaternion): THREE.BufferGeom
   const dir = toLocal(t.dir);
   const curl = toLocal(t.curl);
   const axis = new THREE.Vector3().crossVectors(dir, curl).normalize(); // dir → curl
-  const lens = [0.034, 0.03, 0.025];
-  const rads = [0.0112, 0.0099, 0.009, 0.008];
+  const lens = [0.031, 0.027, 0.023];
+  const rads = [0.0108, 0.0095, 0.0087, 0.0078];
   const tp = [new THREE.Vector3(-0.024, 0.018, -0.009)];
   const flexes = [0, t.flex[0], t.flex[1]];
   const palmSide = axis.clone().negate();
@@ -294,9 +298,12 @@ function handParts(spec: HandSpec, rotation: THREE.Quaternion): THREE.BufferGeom
   return out;
 }
 
+/** Cloth fold displacement (m) at angle `th` around and `s` along a sleeve or cuff. */
+type FoldFn = (th: number, s: number) => number;
+
 /**
  * Lathed tube along `axis` from `start` with radius profile [(r, s)], an oval cross-section
- * aligned to `lateral`, and cloth-fold displacement. Returns rifle-space geometry.
+ * aligned to `lateral` (minor axis scaled by `flatten`), displaced by `fold`. Rifle space.
  */
 function clothTube(
   start: THREE.Vector3,
@@ -304,12 +311,11 @@ function clothTube(
   lateral: THREE.Vector3,
   flatten: number,
   profile: readonly (readonly [number, number])[],
-  folds: number,
-  seed: number,
+  fold: FoldFn,
 ): THREE.BufferGeometry {
   const g = new THREE.LatheGeometry(
     profile.map(([r, s]) => new THREE.Vector2(r, s)),
-    32,
+    40,
   );
   const pos = g.getAttribute('position') as THREE.BufferAttribute;
   for (let i = 0; i < pos.count; i++) {
@@ -318,13 +324,7 @@ function clothTube(
     const z = pos.getZ(i);
     const r = Math.hypot(x, z);
     if (r < 1e-5) continue;
-    const th = Math.atan2(x, z);
-    const fold =
-      folds *
-      (0.0022 * Math.sin(th * 3 + s * 29 + seed) +
-        0.0014 * Math.sin(th * 5 - s * 43 + seed * 2.1) +
-        0.0032 * Math.max(0, Math.sin(s * 64 + th * 0.9 + seed)) * Math.exp(-s * 6));
-    const k = (r + fold) / r;
+    const k = (r + fold(Math.atan2(x, z), s)) / r;
     pos.setXYZ(i, x * k, s, z * k * flatten);
   }
   g.computeVertexNormals();
@@ -335,6 +335,47 @@ function clothTube(
   const az = new THREE.Vector3().crossVectors(ax, ay);
   geo.applyMatrix4(new THREE.Matrix4().makeBasis(ax, ay, az).setPosition(start));
   return geo;
+}
+
+const SLEEVE_LEN = 0.36;
+const SLEEVE_WRIST_R = 0.045;
+const SLEEVE_ELBOW_R = 0.06;
+const CUFF_BAND = 0.045; // hemmed cuff band, ends in a seam
+
+/** Sleeve radius profile: turned hem, cuff band + seam, then a steady taper to the elbow. */
+function sleeveProfile(): [number, number][] {
+  const prof: [number, number][] = [
+    [SLEEVE_WRIST_R - 0.008, 0.007],
+    [SLEEVE_WRIST_R - 0.002, 0.0],
+    [SLEEVE_WRIST_R + 0.0015, 0.004],
+  ];
+  const n = 32;
+  for (let i = 1; i <= n; i++) {
+    const s = 0.004 + (SLEEVE_LEN * i) / n;
+    let r = THREE.MathUtils.lerp(SLEEVE_WRIST_R, SLEEVE_ELBOW_R, s / SLEEVE_LEN);
+    if (s < CUFF_BAND) r += 0.0015; // band sits proud of the sleeve
+    if (Math.abs(s - CUFF_BAND) < 0.006) r -= 0.0012; // seam groove
+    prof.push([r, s]);
+  }
+  return prof;
+}
+
+/**
+ * Sleeve folds: compression rings bunched above the cuff, long diagonal drape folds along the
+ * forearm and a twist toward the elbow. `seed` decorrelates left/right arms.
+ */
+function sleeveFolds(seed: number): FoldFn {
+  return (th, s) => {
+    const bunch = THREE.MathUtils.smoothstep(s, 0.04, 0.07) * (1 - THREE.MathUtils.smoothstep(s, 0.13, 0.21));
+    const ring = Math.max(0, Math.sin(s * 85 + th * 0.6 + seed));
+    return (
+      0.0045 * bunch * ring * ring +
+      0.003 * Math.sin(th * 3 + s * 22 + seed) +
+      0.0018 * Math.sin(th * 5 - s * 40 + seed * 2.1) +
+      0.0009 * Math.sin(th * 9 + s * 70 + seed * 0.7) +
+      0.0025 * THREE.MathUtils.smoothstep(s, 0.22, 0.36) * Math.sin(th * 2 + s * 30 + seed * 1.3)
+    );
+  };
 }
 
 export interface Arm {
@@ -379,31 +420,27 @@ export function createArm(spec: HandSpec): Arm {
       [0.027, 0.03],
       [0.0285, 0.062],
     ],
-    0.2,
-    1.7,
+    (th, s) => 0.0006 * Math.sin(th * 4 + s * 60 + 1.7),
   );
   gb.add(mats.glove, cuff.applyMatrix4(toLocal), ARMOUR, 1);
 
-  // Sleeve: turned hem over the cuff, widening toward the elbow.
-  const tube = clothTube(
-    wrist.clone().addScaledVector(fa, 0.03),
-    fa,
-    lateral,
-    0.82,
-    [
-      [0.027, 0.006],
-      [0.033, 0.0],
-      [0.036, 0.004],
-      [0.0368, 0.02],
-      [0.0385, 0.06],
-      [0.042, 0.14],
-      [0.046, 0.24],
-      [0.049, 0.34],
-    ],
-    1,
-    spec.mirror ? 4.2 : 0.6,
-  );
+  // Sleeve: turned hem over the cuff, cuff band + seam, tapering out to the elbow.
+  const start = wrist.clone().addScaledVector(fa, 0.03);
+  const tube = clothTube(start, fa, lateral, 0.82, sleeveProfile(), sleeveFolds(spec.mirror ? 4.2 : 0.6));
   sb.add(mats.sleeve, tube.applyMatrix4(toLocal), 0xffffff);
+
+  // Hook-and-loop cuff tab on the back of the wrist.
+  const back = new THREE.Vector3(0, 0, 1).applyQuaternion(rotation);
+  back.addScaledVector(fa, -back.dot(fa)).normalize();
+  const side = new THREE.Vector3().crossVectors(fa, back);
+  const tab = superellipsoid(0.026, 0.03, 0.0032, 0.4, 16);
+  tab.computeVertexNormals();
+  const tabPos = start
+    .clone()
+    .addScaledVector(fa, 0.022)
+    .addScaledVector(back, (SLEEVE_WRIST_R + 0.0015) * 0.82 + 0.0028);
+  tab.applyMatrix4(new THREE.Matrix4().makeBasis(side, fa, back).setPosition(tabPos));
+  sb.add(mats.sleeve, tab.applyMatrix4(toLocal), 0xd8d8d8);
 
   for (const mesh of [...gb.build(glove), ...sb.build(sleeve)]) {
     mesh.castShadow = false;

@@ -1,7 +1,7 @@
 /**
  * Generic modern 5.56 carbine (AR-pattern silhouette, no brand names or markings), authored
  * entirely in code at real-world scale (~0.83 m overall, 14.5" barrel, 11.5" M-LOK handguard,
- * micro red-dot on a lower-1/3 riser).
+ * red dot with a flared objective on a low, absolute co-witness riser).
  *
  * Local convention: bore axis on y = 0 along −Z, pistol grip near the origin, metres.
  *
@@ -44,9 +44,7 @@ export interface Rifle {
 export const RIFLE_POINTS = {
   muzzle: new THREE.Vector3(0, 0, -0.528),
   /** Centre of the optic window — the ADS pose puts the eye on this line. */
-  opticCenter: new THREE.Vector3(0, 0.068, -0.032),
-  /** Optic rear face (closest point to the eye at ADS). */
-  opticRearZ: -0.009,
+  opticCenter: new THREE.Vector3(0, 0.054, -0.032),
   magPivot: new THREE.Vector3(0, -0.006, -0.0995),
 } as const;
 
@@ -54,11 +52,11 @@ const DEG = Math.PI / 180;
 
 /** sRGB part tints (read by the materials through the vertex `color` attribute). */
 const TINT = {
-  alu: 0x2d2f32,
-  rail: 0x292b2e,
-  steel: 0x3c3d3a,
-  poly: 0x262729,
-  rubber: 0x1b1b1b,
+  alu: 0x1b1c1e,
+  rail: 0x1a1b1d,
+  steel: 0x232422,
+  poly: 0x1e1f21,
+  rubber: 0x141414,
   fde: 0x6a5b44,
   fdeDark: 0x54483a,
 };
@@ -751,80 +749,111 @@ function addRearEnd(b: Batch, M: Palette, lod: Lod): void {
   }
 }
 
+/**
+ * Red dot with a rear-aperture window: the bore flares from the rear lip to a larger objective
+ * bell, so from the ADS eye point the bore wall is seen edge-on (no grey "tunnel") and the
+ * window is the rear ring itself.
+ */
 function addOptic(b: Batch, M: Palette, glass: THREE.Material | null, lod: Lod): void {
   const o = lod.o;
   const y = RIFLE_POINTS.opticCenter.y;
-  // Riser mount clamping the rail (lightening window above the rail).
+  // Low clamp base gripping the rail.
   b.add(
     M.alu,
     side(
       [
-        [-0.059, 0.0244, 0.001],
-        [-0.007, 0.0244, 0.001],
-        [-0.007, 0.04, 0.002],
-        [-0.059, 0.04, 0.002],
+        [-0.05, 0.0244, 0.001],
+        [-0.008, 0.0244, 0.001],
+        [-0.008, 0.0335, 0.002],
+        [-0.05, 0.0335, 0.002],
       ],
       0.0262,
       o(0.0009),
-      lod.hi ? [rrect(-0.033, 0.0335, 0.026, 0.0055, 0.0026)] : [],
     ),
     TINT.alu,
   );
   if (!lod.hi) {
-    b.add(M.alu, lathe([[0.0, -0.009], [0.0132, -0.009], [0.0132, -0.0556], [0.0, -0.0556]], { segments: 8 }).translate(0, y, 0), TINT.alu);
-    b.add(M.alu, long([[-0.0105, 0.039], [0.0105, 0.039], [0.0105, 0.06], [-0.0105, 0.06]], -0.05, -0.014), TINT.alu);
+    b.add(
+      M.alu,
+      lathe([[0.0, -0.0135], [0.014, -0.0135], [0.014, -0.03], [0.0176, -0.045], [0.0176, -0.0507], [0.0, -0.0507]], {
+        segments: 8,
+      }).translate(0, y, 0),
+      TINT.alu,
+    );
+    b.add(M.alu, long([[-0.008, 0.033], [0.008, 0.033], [0.008, 0.042], [-0.008, 0.042]], -0.036, -0.016), TINT.alu);
     return;
   }
 
-  // Saddle: concave top embedded in the tube wall so there is no gap or interior intrusion.
+  // Short riser neck (its front slopes away under the objective bell), then a saddle whose
+  // concave top is embedded in the tube wall (no gap, no intrusion into the bore).
+  b.add(
+    M.alu,
+    side(
+      [
+        [-0.04, 0.033],
+        [-0.014, 0.033],
+        [-0.017, 0.0405, 0.0015],
+        [-0.03, 0.0405, 0.0015],
+        [-0.036, 0.036],
+      ],
+      0.015,
+      o(0.0008),
+    ),
+    TINT.alu,
+  );
   const saddle: Corner[] = [
-    [-0.0105, 0.0395, 0.0015],
-    [0.0105, 0.0395, 0.0015],
+    [-0.0075, 0.0395, 0.001],
+    [0.0075, 0.0395, 0.001],
   ];
-  const rs = 0.012;
-  const a0 = Math.asin(0.0105 / rs);
-  for (let i = 0; i <= 8; i++) {
-    const a = a0 - (2 * a0 * i) / 8;
+  const rs = 0.0134;
+  const a0 = Math.asin(0.0075 / rs);
+  for (let i = 0; i <= 10; i++) {
+    const a = a0 - (2 * a0 * i) / 10;
     saddle.push([Math.sin(a) * rs, y - Math.cos(a) * rs]);
   }
-  b.add(M.alu, long(saddle, -0.05, -0.014, o(0.0008)), TINT.alu);
+  b.add(M.alu, long(saddle, -0.029, -0.0165, o(0.0006)), TINT.alu);
 
-  // Tube body with lens rings (interior darkened).
+  // Housing: rear ring, slim body, flared objective bell; conical bore (interior darkened).
+  // 64 segments so it stays round at ADS distance.
   b.add(
     M.alu,
     lathe(
       [
-        [0.0106, -0.009],
-        [0.0122, -0.009],
-        [0.0132, -0.01],
-        [0.0132, -0.0135],
-        [0.0127, -0.014],
-        [0.0127, -0.048],
-        [0.0134, -0.0486],
-        [0.0134, -0.0548],
-        [0.0124, -0.0556],
-        [0.0106, -0.0556],
-        [0.0106, -0.009],
+        [0.0108, -0.0135],
+        [0.0128, -0.0135],
+        [0.014, -0.0145],
+        [0.014, -0.0175],
+        [0.0137, -0.018],
+        [0.0137, -0.03],
+        [0.0165, -0.04],
+        [0.0172, -0.0445],
+        [0.0176, -0.045],
+        [0.0176, -0.0497],
+        [0.0168, -0.0507],
+        [0.016, -0.0507],
+        [0.011, -0.0145],
+        [0.0108, -0.0135],
       ],
-      { segments: 40, interiorAO: 0.12 },
+      { segments: 64, interiorAO: 0.1 },
     ).translate(0, y, 0),
     TINT.alu,
   );
 
-  // Turrets: elevation (top), windage (right), brightness dial (left).
-  const tz = -0.03;
-  b.add(M.alu, new THREE.CylinderGeometry(0.0085, 0.0085, 0.006, 24).translate(0, y + 0.0127, tz), TINT.alu);
-  b.add(M.alu, ridged(0.0072, 0.0045, 14, 0.0004).translate(0, y + 0.0127 + 0.00525, tz), TINT.alu);
-  b.add(M.alu, place(new THREE.CylinderGeometry(0.0085, 0.0085, 0.006, 24), 0.0127, y, tz, 0, 0, -Math.PI / 2), TINT.alu);
-  b.add(M.alu, place(ridged(0.0072, 0.0045, 14, 0.0004), 0.0127 + 0.00525, y, tz, 0, 0, -Math.PI / 2), TINT.alu);
-  b.add(M.alu, place(new THREE.CylinderGeometry(0.0078, 0.0078, 0.004, 24), -0.0127, y, -0.034, 0, 0, Math.PI / 2), TINT.alu);
-  b.add(M.alu, place(ridged(0.0098, 0.0058, 18, 0.0005), -0.0127 - 0.0049, y, -0.034, 0, 0, Math.PI / 2), TINT.alu);
+  // Turrets on the slim body: elevation (top), windage (right), brightness dial (left).
+  const tz = -0.024;
+  const R = 0.0137;
+  b.add(M.alu, new THREE.CylinderGeometry(0.0075, 0.0075, 0.006, 48).translate(0, y + R, tz), TINT.alu);
+  b.add(M.alu, ridged(0.0065, 0.0045, 24, 0.0003).translate(0, y + R + 0.00525, tz), TINT.alu);
+  b.add(M.alu, place(new THREE.CylinderGeometry(0.0075, 0.0075, 0.006, 48), R, y, tz, 0, 0, -Math.PI / 2), TINT.alu);
+  b.add(M.alu, place(ridged(0.0065, 0.0045, 24, 0.0003), R + 0.00525, y, tz, 0, 0, -Math.PI / 2), TINT.alu);
+  b.add(M.alu, place(new THREE.CylinderGeometry(0.0068, 0.0068, 0.004, 48), -R, y, tz, 0, 0, Math.PI / 2), TINT.alu);
+  b.add(M.alu, place(ridged(0.0088, 0.0055, 26, 0.00045), -R - 0.00475, y, tz, 0, 0, Math.PI / 2), TINT.alu);
 
   // Cross-bolt: hex nut left, round head right.
-  b.add(M.steel, place(new THREE.CylinderGeometry(0.0046, 0.0046, 0.004, 6), -0.0151, 0.0285, -0.033, 0, 0, Math.PI / 2), TINT.steel);
-  b.add(M.steel, place(new THREE.CylinderGeometry(0.0042, 0.0042, 0.0025, 18), 0.0143, 0.0285, -0.033, 0, 0, Math.PI / 2), TINT.steel);
+  b.add(M.steel, place(new THREE.CylinderGeometry(0.0046, 0.0046, 0.004, 6), -0.0151, 0.0288, -0.029, 0, 0, Math.PI / 2), TINT.steel);
+  b.add(M.steel, place(new THREE.CylinderGeometry(0.0042, 0.0042, 0.0025, 24), 0.0143, 0.0288, -0.029, 0, 0, Math.PI / 2), TINT.steel);
 
-  if (glass) b.add(glass, new THREE.CircleGeometry(0.0107, 40).translate(0, y, -0.052), 0xffffff);
+  if (glass) b.add(glass, new THREE.CircleGeometry(0.0154, 64).translate(0, y, -0.046), 0xffffff);
 }
 
 export function createRifle(detail: RifleDetail = 'world'): Rifle {

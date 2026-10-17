@@ -52,6 +52,14 @@ export class Navigation {
     return new THREE.Vector3(r.point.x, r.point.y, r.point.z);
   }
 
+  /** Allocation-free variant of `closestPoint` for per-tick AI queries. */
+  closestPointInto(p: THREE.Vector3, out: THREE.Vector3): boolean {
+    const r = this.query.findClosestPoint(p);
+    if (!r.success) return false;
+    out.set(r.point.x, r.point.y, r.point.z);
+    return true;
+  }
+
   /** A random reachable point within `radius` of `center`, or null. */
   randomPoint(center: THREE.Vector3, radius: number): THREE.Vector3 | null {
     const r = this.query.findRandomPointAroundCircle(center, radius);

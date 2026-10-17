@@ -92,19 +92,24 @@ function buildMaterial(): THREE.MeshStandardNodeMaterial {
   const fadeMid = float(1).sub(smoothstep(0.004, 0.009, foot)); // < ~6 m
 
   // --- Camouflage (original blotch pattern) ---------------------------------------------
-  const warp = mx_noise_float(p.mul(3.1).add(vec3(3.1, 1.7, 5.9))).mul(0.045);
+  // Multi-scale: large dark masses, mid light blotches, small black shapes, then fine
+  // speckle — so it still reads as a printed pattern up close and breaks the silhouette at range.
+  const warp = mx_noise_float(p.mul(6.2).add(vec3(3.1, 1.7, 5.9))).mul(0.024);
   const q = p.add(vec3(warp, warp.mul(0.6), warp.mul(-0.8)));
-  const nA = float(mx_fractal_noise_float(q.mul(vec3(4.6, 3.1, 4.6)), 3, 2.1, 0.5));
-  const nB = float(mx_fractal_noise_float(q.mul(vec3(5.4, 3.8, 5.4)).add(vec3(17.3, -4.2, 9.1)), 3, 2.1, 0.5));
-  const nC = float(mx_fractal_noise_float(q.mul(vec3(8.5, 6.2, 8.5)).add(vec3(-9.1, 6.6, 2.3)), 2, 2.2, 0.45));
-  const mDark = aaStep(0.06, nA);
+  const nA = float(mx_fractal_noise_float(q.mul(vec3(8.8, 6.2, 8.8)), 3, 2.1, 0.5));
+  const nB = float(mx_fractal_noise_float(q.mul(vec3(11, 7.6, 11)).add(vec3(17.3, -4.2, 9.1)), 3, 2.1, 0.5));
+  const nC = float(mx_fractal_noise_float(q.mul(vec3(17, 12.4, 17)).add(vec3(-9.1, 6.6, 2.3)), 2, 2.2, 0.45));
+  const nD = mx_noise_float(q.mul(52).add(vec3(4.4, -2.2, 7.7)));
+  const mDark = aaStep(0.04, nA);
   const mLight = aaStep(0.2, nB);
   const mBlack = aaStep(0.3, nC);
+  const mSpeck = aaStep(0.55, nD).mul(0.6);
   const cMid = albedo;
   const cDark = albedo.mul(vec3(0.5, 0.48, 0.42));
   const cLight = mix(albedo.mul(1.4), vec3(0.2, 0.175, 0.12), 0.3);
   const cBlack = albedo.mul(0.3);
-  const camo = mix(mix(mix(cMid, cDark, mDark), cLight, mLight.mul(float(1).sub(mDark.mul(0.6)))), cBlack, mBlack);
+  const camoBase = mix(mix(mix(cMid, cDark, mDark), cLight, mLight.mul(float(1).sub(mDark.mul(0.6)))), cBlack, mBlack);
+  const camo = mix(camoBase, cDark.mul(0.8), mSpeck);
 
   // --- Height fields (metres) ------------------------------------------------------------
   // Fabric folds: horizontal-ish bunching along limbs (local Y is the limb axis).

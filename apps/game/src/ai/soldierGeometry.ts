@@ -264,14 +264,20 @@ export class PartSink {
   private readonly _n = new THREE.Vector3();
   private readonly _nm = new THREE.Matrix3();
   private readonly _c = new THREE.Color();
+  private readonly _m = new THREE.Matrix4();
 
-  constructor(private readonly dust: THREE.Color) {}
+  /** `pre` (optional) is applied after every part transform, e.g. to drop a whole segment. */
+  constructor(
+    private readonly dust: THREE.Color,
+    private readonly pre: THREE.Matrix4 | null = null,
+  ) {}
 
   /**
    * Adds `geo` transformed by `m`. `dustTop` (model-space metres) fades a dust/grime layer onto
    * the part below that height — trousers and boots pick up dirt from the ground.
    */
-  add(geo: THREE.BufferGeometry, m: THREE.Matrix4 | null, color: number, surf: Surface, dustTop = 0): void {
+  add(geo: THREE.BufferGeometry, part: THREE.Matrix4 | null, color: number, surf: Surface, dustTop = 0): void {
+    const m = this.pre ? (part ? this._m.multiplyMatrices(this.pre, part) : this.pre) : part;
     const p = geo.getAttribute('position');
     if (!geo.getAttribute('normal')) geo.computeVertexNormals();
     const n = geo.getAttribute('normal');

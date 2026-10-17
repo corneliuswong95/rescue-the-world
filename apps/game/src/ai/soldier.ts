@@ -1,20 +1,24 @@
 /**
  * Original stylized-realistic modern infantry soldier, authored in code (no ripped/mocap assets —
- * CS/CoD are *look* references only, per rule 3). The body is a pivot hierarchy of nine rigid
+ * CS/CoD are *look* references only, per rule 3). The body is a pivot hierarchy of ten rigid
  * segments (see soldierModel.ts), each ONE draw call through a single shared TSL material
- * (soldierMaterial.ts), holding the rifle from `createRifle()`.
+ * (soldierMaterial.ts); the arms segment carries the rifle from `createRifle()`.
  *
  * Procedural animation, zero allocations per frame:
- *   - idle: breathing, slow weight shift between the feet, torso/head scanning;
- *   - run:  speed-adaptive gait (cadence + stride from measured root speed) with hip/knee/ankle
- *           phase offsets, pelvis yaw/roll with shoulder counter-rotation, rifle held steady;
- *   - dead: hit jolt → knees buckle → topple onto a side → small rebound → settle.
+ *   - idle:  breathing, slow weight shift between the feet, torso/head scanning;
+ *   - run:   speed-adaptive gait (cadence + stride from measured root speed) with hip/knee/ankle
+ *            phase offsets; the pelvis turns toward the travel direction (strafe / backpedal)
+ *            while the shoulders stay on the facing, so sideways moves step instead of skate;
+ *   - aim:   upper-body layer — rifle shouldered, torso + head pitched at the target, cheek weld;
+ *            blends in/out in 0.2 s over idle or run;
+ *   - flinch: ~150 ms additive hit reaction;
+ *   - dead:  hit jolt → knees buckle → topple onto a side → small rebound → settle, then frozen.
  * Ground contact comes from hull probes: the lowest sole (alive) or lowest hull point (dying) is
  * pinned to the floor, so feet never float/sink and the body never sinks into the ground.
  */
 import * as THREE from 'three/webgpu';
 import { createRifle } from '../weapons/rifle';
-import { PARENT, PIVOT, RIFLE_POS, RIFLE_QUAT, SEG, SEG_COUNT, soldierRig } from './soldierModel';
+import { PARENT, PIVOT, RIFLE_POS, RIFLE_QUAT, SEG, SEG_COUNT, soldierRig, type Kit } from './soldierModel';
 import { soldierMaterial } from './soldierMaterial';
 
 export type AnimState = 'idle' | 'run' | 'dead';
@@ -24,6 +28,7 @@ export interface SoldierConfig {
   vest: number;
   helmet: number;
   scale: number;
+  kit: Kit;
 }
 
 /** Pose channels (radians / metres). */
@@ -54,12 +59,18 @@ const C = {
   fRZ: 23,
   mRX: 24,
   mRZ: 25,
+  aRX: 26,
+  aY: 27,
+  aZ: 28,
 } as const;
-const NCH = 26;
+const NCH = 29;
 
 const GROUND = -0.9; // feet at the bottom of the 1.8 m capsule (root = capsule centre)
 const PI = Math.PI;
 const TAU = PI * 2;
+const AIM_BLEND = 0.2; // s, in and out
+const FLINCH_T = 0.15; // s
+const SETTLED_T = 1.7; // s after death: pose is final, stop evaluating
 
 const clamp01 = (x: number): number => (x < 0 ? 0 : x > 1 ? 1 : x);
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
@@ -100,10 +111,21 @@ export class Soldier {
   private state: AnimState = 'idle';
   private time = 0;
   private phase = 0;
-  private speed = 0;
   private runW = 0;
   private deathT = 0;
+  private settled = false;
+  // Smoothed root velocity in the facing frame (m/s): forward, right.
+  private vf = 0;
+  private vr = 0;
   private hasPrev = false;
+  // Aim layer.
+  private aimOn = false;
+  private aimW = 0;
+  private aimPitch = 0;
+  private aimPitchGoal = 0;
+  // Hit reaction.
+  private flinchT = 1;
+  private flinchDir = 1;
   private readonly seed = Math.random() * 10;
   private readonly fallSide = Math.random() < 0.5 ? 1 : -1;
   private readonly fallFwd = Math.random() * 2 - 1;
@@ -136,9 +158,9 @@ export class Soldier {
       this.probes.push({ seg: this.seg[pr.seg], local: pr.p.clone().sub(PIVOT[pr.seg]), sole: pr.sole });
     }
 
-    // Rifle in the hands (chest segment space), muzzle anchor at its tip.
+    // Rifle in the hands (arms segment space), muzzle anchor at its tip.
     const rifle = createRifle();
-    rifle.group.position.copy(RIFLE_POS).sub(PIVOT[SEG.chest]);
+    rifle.group.position.copy(RIFLE_POS).sub(PIVOT[SEG.arms]);
     rifle.group.quaternion.copy(RIFLE_QUAT);
     this.muzzleAnchor.position.copy(rifle.muzzle);
     rifle.group.add(this.muzzleAnchor);
@@ -146,7 +168,7 @@ export class Soldier {
       const m = o as THREE.Mesh;
       if (m.isMesh) this.ownGeo.push(m.geometry);
     });
-    this.seg[SEG.chest].add(rifle.group);
+    this.seg[SEG.arms].add(rifle.group);
 
     this.model.position.y = GROUND;
     this.model.scale.setScalar(cfg.scale);
@@ -165,41 +187,87 @@ export class Soldier {
     this.state = state;
   }
 
+  /** Shoulder the rifle (`on`) and pitch the upper body `pitch` rad above the horizontal. */
+  aim(on: boolean, pitch: number): void {
+    this.aimOn = on;
+    this.aimPitchGoal = Math.max(-0.9, Math.min(0.9, pitch));
+  }
+
+  /** Short (≈150 ms) hit reaction layered over whatever is playing. */
+  flinch(): void {
+    this.flinchT = 0;
+    this.flinchDir = Math.random() < 0.5 ? -1 : 1;
+  }
+
   update(dt: number): void {
     dt = Math.min(dt, 0.1);
     this.time += dt;
 
     if (this.state === 'dead') {
+      if (this.settled) return; // corpse: final pose already applied
       this.deathT += dt;
       this.deathPose(this.deathT, this.deadP);
       const w = smooth(this.deathT / 0.16);
       for (let i = 0; i < NCH; i++) this.pose[i] = lerp(this.fromP[i], this.deadP[i], w);
       this.apply(this.pose);
       this.ground(false, 0);
+      this.settled = this.deathT >= SETTLED_T;
       return;
     }
 
-    // Measured ground speed of the root drives cadence and stride (no foot-skate at any speed).
-    this.root.getWorldPosition(this._wp);
-    if (this.hasPrev && dt > 0) {
-      const v = Math.hypot(this._wp.x - this._prev.x, this._wp.z - this._prev.z) / dt;
-      this.speed += (Math.min(v, 9) - this.speed) * Math.min(1, dt * 5);
-    }
-    this._prev.copy(this._wp);
-    this.hasPrev = true;
-
+    this.measureVelocity(dt);
     this.runW += ((this.state === 'run' ? 1 : 0) - this.runW) * Math.min(1, dt * 7);
-    const v = this.speed;
+    this.aimW = clamp01(this.aimW + (this.aimOn ? dt : -dt) / AIM_BLEND);
+    this.aimPitch += (this.aimPitchGoal - this.aimPitch) * Math.min(1, dt * 10);
+    this.flinchT += dt;
+
+    // Travel direction relative to facing: 0 = forward, ±π/2 = strafe, ±π = backpedal.
+    const v = Math.hypot(this.vf, this.vr);
+    const theta = Math.atan2(this.vr, this.vf);
+    const back = Math.abs(theta) > 1.75;
     const k = clamp01((v - 1.5) / 4.5); // 0 = brisk walk … 1 = sprint
-    if (this.runW > 0.001) this.phase = (this.phase + TAU * (0.8 + 0.13 * v) * dt) % TAU;
+    if (this.runW > 0.001) {
+      const dir = back ? -1 : 1;
+      this.phase = (((this.phase + dir * TAU * (0.8 + 0.13 * v) * dt) % TAU) + TAU) % TAU;
+    }
+    // Pelvis turns toward the travel line (legs step along it); shoulders keep the facing.
+    const travel = back ? theta - Math.sign(theta) * PI : theta;
+    const legYaw = -Math.max(-0.95, Math.min(0.95, travel)) * (back ? 0.6 : 1) * smooth(v / 0.8);
 
     this.idlePose(this.time, this.idleP);
-    this.runPose(this.phase, v, k, this.runP);
-    for (let i = 0; i < NCH; i++) this.pose[i] = lerp(this.idleP[i], this.runP[i], this.runW);
-    this.apply(this.pose);
+    this.runPose(this.phase, v, k, back, this.runP);
+    const o = this.pose;
+    for (let i = 0; i < NCH; i++) o[i] = lerp(this.idleP[i], this.runP[i], this.runW);
+    o[C.hipRY] += legYaw * this.runW;
+    o[C.chRY] -= legYaw * this.runW;
+    this.aimLayer(o, smooth(this.aimW));
+    this.flinchLayer(o);
+    this.apply(o);
     // Brief flight phase before each foot strike at running pace.
     const flight = this.runW * k * 0.028 * bump((this.phase * 2) % TAU, 1.8 * PI, 0.3 * PI);
     this.ground(true, flight);
+  }
+
+  /** Root ground velocity, smoothed, expressed in the facing frame (no allocations). */
+  private measureVelocity(dt: number): void {
+    this.root.getWorldPosition(this._wp);
+    if (this.hasPrev && dt > 0) {
+      const dx = (this._wp.x - this._prev.x) / dt;
+      const dz = (this._wp.z - this._prev.z) / dt;
+      const e = this.root.matrixWorld.elements; // fresh: getWorldPosition just updated it
+      let f = -(dx * e[8] + dz * e[10]);
+      let r = dx * e[0] + dz * e[2];
+      const sp = Math.hypot(f, r);
+      if (sp > 9) {
+        f *= 9 / sp; // teleports / spawn snaps
+        r *= 9 / sp;
+      }
+      const a = Math.min(1, dt * 6);
+      this.vf += (f - this.vf) * a;
+      this.vr += (r - this.vr) * a;
+    }
+    this._prev.copy(this._wp);
+    this.hasPrev = true;
   }
 
   // --- Poses -----------------------------------------------------------------------------
@@ -218,6 +286,7 @@ export class Soldier {
     o[C.hdRX] = -0.02 + Math.sin(t * 0.71 + s) * 0.035 + 0.025;
     o[C.hdRY] = scan * 0.3;
     o[C.hdRZ] = -o[C.chRZ] - o[C.hipRZ] * 0.5;
+    o[C.aRX] = breath * 0.01;
     // Athletic stance: support foot forward, toes out, soft knees, soles flat on the ground.
     const comp = o[C.hipX] / 0.84;
     o[C.tLX] = 0.12;
@@ -234,10 +303,10 @@ export class Soldier {
     o[C.fRZ] = -(o[C.tRZ] + o[C.hipRZ]);
   }
 
-  private runPose(p: number, v: number, k: number, o: Float32Array): void {
+  private runPose(p: number, v: number, k: number, back: boolean, o: Float32Array): void {
     o.fill(0);
-    const lean = lerp(0.07, 0.26, k);
-    const sw = lerp(0.38, 0.7, k) * Math.min(1, Math.max(0.35, v / 2));
+    const lean = back ? 0.02 : lerp(0.07, 0.26, k);
+    const sw = lerp(0.38, 0.7, k) * Math.min(1, Math.max(0.35, v / 2)) * (back ? 0.75 : 1);
     const kneeSwing = lerp(0.8, 1.75, k);
     const hipYaw = lerp(0.09, 0.15, k);
     const cp = Math.cos(p + 0.2 * PI); // left thigh forward-most in late swing
@@ -273,7 +342,41 @@ export class Soldier {
     o[fi] = flat * ws + swingFoot * (1 - ws) + toeOff;
   }
 
+  /**
+   * Aim layer: rifle up into the shoulder (arms segment raised about the shoulder line), torso
+   * leaning into the gun and pitched at the target, head down on the stock with a slight cant.
+   * Scanning and gait counter-rotation are suppressed so the muzzle holds on target.
+   */
+  private aimLayer(o: Float32Array, w: number): void {
+    if (w <= 0) return;
+    const p = this.aimPitch;
+    const faceYaw = -o[C.hipRY]; // chest yaw that cancels the pelvis → shoulders on the facing
+    o[C.chRX] = lerp(o[C.chRX], -0.07 + p * 0.5, w);
+    o[C.chRY] = lerp(o[C.chRY], faceYaw + 0.02, w);
+    o[C.chRZ] = lerp(o[C.chRZ], 0, w);
+    o[C.aRX] = lerp(o[C.aRX], 0.32 + p * 0.5, w);
+    o[C.aY] = lerp(o[C.aY], 0.06, w);
+    o[C.aZ] = lerp(o[C.aZ], -0.02, w);
+    o[C.hdRX] = lerp(o[C.hdRX], -0.3 + p * 0.45, w);
+    o[C.hdRY] = lerp(o[C.hdRY], 0.1, w);
+    o[C.hdRZ] = lerp(o[C.hdRZ], -0.2, w);
+  }
+
+  /** Hit flinch: fast knock-back that peaks at ~60 ms and is gone by ~250 ms. */
+  private flinchLayer(o: Float32Array): void {
+    const t = this.flinchT;
+    if (t >= 0.3) return;
+    const env = t < 0.06 ? t / 0.06 : Math.exp(-(t - 0.06) / (FLINCH_T * 0.45));
+    o[C.chRX] += 0.2 * env;
+    o[C.chRY] += this.flinchDir * 0.14 * env;
+    o[C.hdRX] += 0.22 * env;
+    o[C.hdRZ] += this.flinchDir * 0.1 * env;
+    o[C.aRX] -= 0.12 * env;
+    o[C.hipX] -= this.flinchDir * 0.015 * env;
+  }
+
   private deathPose(t: number, o: Float32Array): void {
+    o.fill(0);
     const s = this.fallSide;
     const jolt = t < 0.2 ? Math.sin(PI * (t / 0.2)) : 0; // hit reaction
     const a = smooth(t / 0.42); // knees buckle
@@ -281,12 +384,10 @@ export class Soldier {
     const b = u * u; // topple accelerates under gravity
     const tau = t - 0.92;
     const rebound = tau > 0 ? -0.06 * Math.exp(-6 * tau) * Math.sin(13 * tau) : 0;
-    o[C.hipX] = 0;
     o[C.hipY] = -0.05 * a;
     o[C.hipZ] = 0.04 * a;
     o[C.hipRX] = -0.3 * a - 0.1 * b;
     o[C.hipRY] = s * 0.1 * a;
-    o[C.hipRZ] = 0;
     o[C.chRX] = 0.16 * jolt - 0.4 * a + 0.15 * b;
     o[C.chRY] = s * 0.18 * a;
     o[C.chRZ] = s * 0.18 * b;
@@ -298,13 +399,12 @@ export class Soldier {
     o[C.tLZ] = -0.06 - s * 0.1 * b;
     o[C.sL] = -0.1 - 1.6 * a + 0.6 * b;
     o[C.fLX] = 0.4 * a - 0.6 * b;
-    o[C.fLZ] = 0;
     o[C.tRX] = -0.02 + 0.8 * a + 0.1 * b;
     o[C.tRY] = -0.1 * a;
     o[C.tRZ] = 0.06 - s * 0.05 * b;
     o[C.sR] = -0.1 - 1.3 * a + 0.2 * b;
     o[C.fRX] = 0.35 * a - 0.5 * b;
-    o[C.fRZ] = 0;
+    o[C.aRX] = -0.25 * a; // rifle sags as the arms go limp
     o[C.mRX] = -0.14 * b * this.fallFwd;
     o[C.mRZ] = s * (0.1 * a + 1.36 * b + rebound);
   }
@@ -312,10 +412,14 @@ export class Soldier {
   private apply(o: Float32Array): void {
     const sg = this.seg;
     const H = PIVOT[SEG.hips];
+    const A = PIVOT[SEG.arms];
+    const W = PIVOT[SEG.chest];
     sg[SEG.hips].position.set(H.x + o[C.hipX], H.y + o[C.hipY], H.z + o[C.hipZ]);
     sg[SEG.hips].rotation.set(o[C.hipRX], o[C.hipRY], o[C.hipRZ]);
     sg[SEG.chest].rotation.set(o[C.chRX], o[C.chRY], o[C.chRZ]);
     sg[SEG.head].rotation.set(o[C.hdRX], o[C.hdRY], o[C.hdRZ]);
+    sg[SEG.arms].position.set(A.x - W.x, A.y - W.y + o[C.aY], A.z - W.z + o[C.aZ]);
+    sg[SEG.arms].rotation.set(o[C.aRX], 0, 0);
     sg[SEG.thighL].rotation.set(o[C.tLX], o[C.tLY], o[C.tLZ]);
     sg[SEG.shinL].rotation.set(o[C.sL], 0, 0);
     sg[SEG.footL].rotation.set(o[C.fLX], 0, o[C.fLZ]);
@@ -346,8 +450,8 @@ export class Soldier {
   }
 
   dispose(): void {
-    // Body geometry + the soldier material are shared (cached per archetype tint); only the
-    // rifle's geometry is per-instance. Rifle materials are shared by createRifle().
+    // Body geometry + the soldier material are shared (cached per look); only the rifle's
+    // geometry is per-instance. Rifle materials are shared by createRifle().
     for (const g of this.ownGeo) g.dispose();
   }
 }

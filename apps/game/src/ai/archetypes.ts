@@ -13,47 +13,54 @@ export interface Archetype {
   fireInterval: number;
   damage: number;
   fireRange: number;
+  /** Seconds from spotting the player to the first shot (randomised ±15% per sighting). */
   reaction: number;
   spread: number; // metres of aim error per metre of distance
+  /** Lateral speed while engaging (m/s) — keeps them from standing still as gallery targets. */
+  strafeSpeed: number;
 }
 
 export const RIFLEMAN: Archetype = {
   name: 'Rifleman',
-  soldier: { uniform: 0x4d5340, vest: 0x24261f, helmet: 0x3a3f2e, scale: 1.0 },
+  soldier: { uniform: 0x4d5340, vest: 0x24261f, helmet: 0x3a3f2e, scale: 1.0, kit: 'rifleman' },
   maxHp: 100,
   patrolSpeed: 2.2,
   engageSpeed: 4.6,
   fireInterval: 0.5,
   damage: 9,
   fireRange: 34,
-  reaction: 0.34,
+  reaction: 0.75,
   spread: 0.03,
+  strafeSpeed: 1.9,
 };
 
 export const RUSHER: Archetype = {
   name: 'Rusher',
-  soldier: { uniform: 0x5a3a2e, vest: 0x1c1a18, helmet: 0x2e2622, scale: 0.96 },
+  // Coyote uniform, ranger-green chest rig: light kit, reads slimmer than the plate carriers.
+  soldier: { uniform: 0x7a6a50, vest: 0x40463a, helmet: 0x6d604b, scale: 0.96, kit: 'rusher' },
   maxHp: 70,
   patrolSpeed: 2.8,
   engageSpeed: 6.4, // closes distance fast
   fireInterval: 0.4,
   damage: 7,
   fireRange: 22, // wants to be close
-  reaction: 0.28,
+  reaction: 0.6,
   spread: 0.05, // less accurate
+  strafeSpeed: 2.5,
 };
 
 export const HEAVY: Archetype = {
   name: 'Heavy',
-  soldier: { uniform: 0x33383a, vest: 0x141518, helmet: 0x1e2224, scale: 1.14 },
+  soldier: { uniform: 0x33383a, vest: 0x141518, helmet: 0x1e2224, scale: 1.14, kit: 'heavy' },
   maxHp: 210,
   patrolSpeed: 1.8,
   engageSpeed: 3.0, // slow
   fireInterval: 0.7,
   damage: 15,
   fireRange: 30,
-  reaction: 0.5,
+  reaction: 0.9,
   spread: 0.022, // accurate
+  strafeSpeed: 1.5,
 };
 
 /** Scale an archetype's threat by a difficulty multiplier (1 = normal). */

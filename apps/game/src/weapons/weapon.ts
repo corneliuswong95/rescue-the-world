@@ -136,6 +136,7 @@ export class RaycastWeapon {
   };
   private readonly muzzleFlash = new MuzzleFlash(0.11);
   private readonly muzzleLight: THREE.PointLight;
+  private lightReach = 0.5; // m down-range of the muzzle
   private readonly brass = new BrassPool();
   private kick = 0;
   private ads = 0; // 0 hip … 1 aimed
@@ -223,9 +224,10 @@ export class RaycastWeapon {
     this.viewmodel.muzzle.add(this.muzzleFlash.root);
 
     // Flash light sits down-range (further when aimed, so it can't light up the optic tube).
+    // It hangs off the camera, not the viewmodel: hiding the gun in menus must never change the
+    // scene's light set, or every material rebuilds its lighting on DEPLOY (~1 s hitch).
     this.muzzleLight = new THREE.PointLight(0xffc27a, 0, 8, 2);
-    this.muzzleLight.position.set(0, 0, -0.5);
-    this.viewmodel.muzzle.add(this.muzzleLight);
+    this.camera.add(this.muzzleLight);
 
     // Dim, very short-range fill so the viewmodel reads in shade; sits beside the eye (not in
     // front of it) so walls the player hugs don't get a hotspot.
@@ -304,6 +306,9 @@ export class RaycastWeapon {
 
     this.muzzleFlash.update(dt);
     this.muzzleLight.intensity = THREE.MathUtils.damp(this.muzzleLight.intensity, 0, 30, dt);
+    this.viewmodel.muzzle.getWorldPosition(this._muzzleWorld);
+    this.camera.worldToLocal(this.muzzleLight.position.copy(this._muzzleWorld));
+    this.muzzleLight.position.z -= this.lightReach;
 
     if (!this.brass.mesh.parent) this.attachBrass();
     const ground = this.groundY ?? this._rayOrigin.y - EYE_HEIGHT;
@@ -443,7 +448,7 @@ export class RaycastWeapon {
     // Aimed: a small flash and a dim light far down-range so neither washes out the optic.
     const aimed = this.ads > 0.5;
     this.muzzleFlash.fire(0.045, aimed ? 0.3 : 1);
-    this.muzzleLight.position.z = aimed ? -1.2 : -0.5;
+    this.lightReach = aimed ? 1.2 : 0.5;
     this.muzzleLight.intensity = aimed ? 1.2 : 6;
 
     // Brass: out of the ejection port, back-right and a little up.

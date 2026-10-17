@@ -128,8 +128,8 @@ export function bakeLocalProbe(
   scene: THREE.Scene,
   sky: SkyLight,
   at: THREE.Vector3,
-): void {
-  const cubeRT = new THREE.CubeRenderTarget(256, { type: THREE.HalfFloatType });
+): THREE.RenderTarget {
+  const cubeRT = new THREE.CubeRenderTarget(128, { type: THREE.HalfFloatType }); // ample for bounce + rough reflections
   const cubeCam = new THREE.CubeCamera(0.3, 300, cubeRT);
   cubeCam.position.copy(at);
   cubeCam.updateMatrixWorld();
@@ -145,7 +145,53 @@ export function bakeLocalProbe(
   cubeRT.dispose();
   sky.iblSky.dispose();
 
+  useProbe(scene, env.texture);
+  return env;
+}
+
+/** Make a pre-filtered (PMREM / cube-UV) probe the scene's environment; captured in world space. */
+function useProbe(scene: THREE.Scene, probe: THREE.Texture): void {
   scene.environment?.dispose();
-  scene.environment = env.texture;
-  scene.environmentRotation.set(0, 0, 0); // captured in world space
+  scene.environment = probe;
+  scene.environmentRotation.set(0, 0, 0);
+}
+
+/*
+ * Baked probe file: the PMREM cube-UV atlas exactly as three generated it (so no face/axis
+ * conventions to get wrong), as RGBA half floats. Layout: 'OPRB' magic, u32 width, u32 height,
+ * u32 reserved, then width*height*4 Uint16. Re-bake (tools/assets/bake-probe.mjs) whenever the
+ * level, lighting or the three.js version changes.
+ */
+const PROBE_MAGIC = 0x4252504f; // 'OPRB' little-endian
+
+/** Read back a baked probe (bakeLocalProbe's result) into the shippable file format. */
+export async function exportProbe(renderer: THREE.WebGPURenderer, probe: THREE.RenderTarget): Promise<Uint8Array> {
+  const { width, height } = probe;
+  const px = (await renderer.readRenderTargetPixelsAsync(probe, 0, 0, width, height)) as Uint16Array;
+  const out = new Uint8Array(16 + px.byteLength);
+  new Uint32Array(out.buffer, 0, 4).set([PROBE_MAGIC, width, height, 0]);
+  out.set(new Uint8Array(px.buffer, px.byteOffset, px.byteLength), 16);
+  return out;
+}
+
+/** Use the shipped baked probe if present; returns false (caller bakes live) if it's missing/stale. */
+export async function loadBakedProbe(scene: THREE.Scene, url: string): Promise<boolean> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return false;
+    const buf = await res.arrayBuffer();
+    const [magic, width, height] = new Uint32Array(buf, 0, 4);
+    if (magic !== PROBE_MAGIC || buf.byteLength !== 16 + width * height * 8) return false;
+    const tex = new THREE.DataTexture(new Uint16Array(buf, 16), width, height, THREE.RGBAFormat, THREE.HalfFloatType);
+    tex.mapping = THREE.CubeUVReflectionMapping;
+    tex.minFilter = tex.magFilter = THREE.LinearFilter;
+    tex.generateMipmaps = false;
+    tex.needsUpdate = true;
+    // Mark as already pre-filtered so the PMREM node samples it directly.
+    Object.assign(tex, { isPMREMTexture: true });
+    useProbe(scene, tex);
+    return true;
+  } catch {
+    return false;
+  }
 }

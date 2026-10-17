@@ -9,7 +9,7 @@ import * as THREE from 'three/webgpu';
 import { createRenderer } from './engine/renderer';
 import { createStatsOverlay } from './engine/stats';
 import { createFixedLoop } from './engine/loop';
-import { bakeLocalProbe, setupEnvironment } from './engine/environment';
+import { bakeLocalProbe, exportProbe, loadBakedProbe, setupEnvironment } from './engine/environment';
 import { applyHaze, createSun } from './engine/atmosphere';
 import { createPost } from './engine/post';
 import { initPhysics, createPhysicsWorld } from './physics/world';
@@ -36,9 +36,21 @@ const STEP_HZ = 60;
 const app = document.getElementById('app');
 if (!app) throw new Error('#app container not found');
 
+// Boot stage timings (console, `?debug` only) — time-to-playable is a tracked budget.
+const bootLog = new URLSearchParams(location.search).has('debug');
+let bootLast = performance.now();
+const bootMark = (stage: string): void => {
+  if (!bootLog) return;
+  const now = performance.now();
+  console.info(`[boot] ${stage}: ${(now - bootLast).toFixed(0)} ms (t=${now.toFixed(0)})`);
+  bootLast = now;
+};
+
 await initPhysics();
 await initNavigation();
+bootMark('wasm (physics + recast)');
 const { renderer, backendName } = await createRenderer(app);
+bootMark('renderer init');
 const physics = createPhysicsWorld(STEP_HZ);
 
 // --- Scene, camera, lighting ---
@@ -66,8 +78,11 @@ const sun = createSun(scene, sky);
 applyHaze(scene, sky);
 
 // --- World + navmesh ---
+bootMark('assets + HDRI (download/decode/sun extract/PMREM)');
 const level = buildLevel(scene, physics.world, levelMats, levelAssets);
+bootMark('level build');
 const nav = new Navigation(level.navMeshes);
+bootMark('navmesh');
 // Rapier only refreshes its query structures on step(): do it now so spawn ground-raycasts (and
 // anything else that queries before the first step) see the level.
 physics.world.updateSceneQueries();
@@ -248,9 +263,19 @@ function applySettings(s: Settings): void {
 }
 applySettings(settings);
 
-// Local light probe from the middle of the yard (viewmodel hidden so it isn't captured).
-weapon.setVisible(false);
-bakeLocalProbe(renderer, scene, sky, new THREE.Vector3(0, 2.4, 0));
+// Local light probe from the middle of the yard. Shipped pre-baked (a live bake compiles every
+// material for the cube pass: ~2.5 s of boot); `?bakeprobe` re-bakes live and exposes the file
+// bytes for tools/assets/bake-probe.mjs. Falls back to a live bake if the asset is missing.
+const PROBE_URL = '/assets/hdri/foundry_yard_probe.bin';
+const rebake = new URLSearchParams(location.search).has('bakeprobe');
+if (rebake || !(await loadBakedProbe(scene, PROBE_URL))) {
+  weapon.setVisible(false); // keep the viewmodel out of the capture
+  const probe = bakeLocalProbe(renderer, scene, sky, new THREE.Vector3(0, 2.4, 0));
+  if (rebake) Object.assign(window, { __probeBytes: await exportProbe(renderer, probe) });
+} else {
+  sky.iblSky.dispose();
+}
+bootMark('light probe');
 
 // Shader prewarm: compile every material × pass variant behind the boot, so the first DEPLOY,
 // shot, impact and kill don't hitch on pipeline compiles. Bots are spawned, pooled effects are
@@ -265,23 +290,22 @@ async function prewarm(): Promise<void> {
       unhidden.push(o);
     }
   });
+  // Only the active tier's pipelines: post tiers never draw to the canvas context, so compiling
+  // it (or the other tier's graph) would just add seconds of boot. Switching tier in settings
+  // compiles the new tier once.
   for (let i = 0; i < 4; i++) {
     player.setPose(0, 0.9, 0, (i * Math.PI) / 2, 0);
     player.updateCamera(1, 0, 0);
-    await renderer.compileAsync(scene, camera);
-    renderer.render(scene, camera); // low tier (no post)
-    for (const tier of ['medium', 'high'] as const) {
-      post.setQuality(tier); // both post graphs, so switching tiers never hitches either
-      post.render();
-    }
+    if (usePost) post.render();
+    else renderer.render(scene, camera);
   }
-  applyQuality(settings.quality);
   for (const o of unhidden) o.visible = false;
   weapon.setVisible(false);
   enemies.clear();
   player.respawn(spawn);
 }
 await prewarm();
+bootMark('shader prewarm');
 particles.warmPlume(STACK_TOP, 10);
 menus.showMenu();
 const _aimKick = { pitch: 0, yaw: 0 };

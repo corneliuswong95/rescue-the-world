@@ -43,6 +43,11 @@ export class Player {
 
   /** Look-sensitivity multiplier (settings). */
   sensitivity = 1;
+  /** Move-speed multiplier set each frame by the weapon (e.g. slower while aiming). */
+  speedScale = 1;
+  /** Whether sprint is allowed right now (no sprinting while aiming down sights). */
+  sprintAllowed = true;
+  private isSprinting = false;
 
   private hp = MAX_HP;
   private dead = false;
@@ -132,9 +137,9 @@ export class Player {
     const hasInput = this.wish.lengthSq() > 1e-4;
     if (hasInput) this.wish.normalize();
 
-    const sprinting = this.input.isDown('ShiftLeft') && fwd > 0 && this.crouchT < 0.3;
-    const speed =
-      this.crouchT > 0.3 ? CROUCH_SPEED : sprinting ? SPRINT : WALK;
+    const sprinting = this.sprintAllowed && this.input.isDown('ShiftLeft') && fwd > 0 && this.crouchT < 0.3;
+    this.isSprinting = sprinting && this.grounded;
+    const speed = (this.crouchT > 0.3 ? CROUCH_SPEED : sprinting ? SPRINT : WALK) * this.speedScale;
 
     // Horizontal velocity damps toward desired — momentum in, momentum out.
     this.desired.set(this.wish.x * speed, 0, this.wish.z * speed);
@@ -220,6 +225,11 @@ export class Player {
   }
   /** Camera forward (bound, so AI can call it detached): bots outside it shoot worse. */
   readonly viewDir = (out: THREE.Vector3): THREE.Vector3 => this.camera.getWorldDirection(out);
+
+  /** True while actually sprinting (weapon lowers, can't fire until it comes back up). */
+  get sprinting(): boolean {
+    return this.isSprinting;
+  }
 
   /** Grounded horizontal speed, m/s (weapon move-inaccuracy, HUD). */
   get speed(): number {

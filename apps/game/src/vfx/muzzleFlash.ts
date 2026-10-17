@@ -120,8 +120,9 @@ export class MuzzleFlash {
     this.root.visible = false;
   }
 
-  fire(duration = 0.045): void {
-    const s = this.size * (0.8 + Math.random() * 0.45);
+  /** @param scale extra size multiplier (e.g. smaller through an optic so it can't white it out) */
+  fire(duration = 0.045, scale = 1): void {
+    const s = this.size * scale * (0.8 + Math.random() * 0.45);
     this.star.scale.setScalar(s);
     this.star.rotation.z = Math.random() * Math.PI * 2;
     for (const side of this.sides) side.scale.set(s, s * (0.7 + Math.random() * 0.5), s * (1.1 + Math.random() * 0.8));

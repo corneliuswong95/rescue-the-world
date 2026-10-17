@@ -24,7 +24,7 @@ import { installQaHooks } from './qa';
 import { initNavigation, Navigation } from './ai/navmesh';
 import { HitRegistry } from './combat/hittable';
 import { Tracers } from './vfx/tracers';
-import { ParticleBursts } from './vfx/particles';
+import { ParticleFx } from './vfx/particles';
 import { EnemyManager } from './ai/enemies';
 import { RIFLEMAN, RUSHER, HEAVY, scaleArchetype, type Archetype } from './ai/archetypes';
 import { AudioEngine } from './audio/audio';
@@ -73,30 +73,24 @@ const player = new Player(physics.world, input, camera, spawn);
 
 const registry = new HitRegistry();
 const decals = new DecalPool(scene);
-const playerTracers = new Tracers(scene, 32, 0xffe08a);
-const enemyTracers = new Tracers(scene, 48, 0xff5a3c);
-const particles = new ParticleBursts(scene, 512);
+const playerTracers = new Tracers(scene, 32, 0xffe08a, 2.2); // own fire: subtle
+const enemyTracers = new Tracers(scene, 48, 0xff7a3c, 5); // incoming fire: reads clearly
+const particles = new ParticleFx(scene);
 const hud = createHud();
 const stats = createStatsOverlay(renderer, backendName);
 const post = createPost(renderer, scene, camera);
 const audio = new AudioEngine();
 renderer.domElement.addEventListener('mousedown', () => audio.resume());
 
-const _fxDir = new THREE.Vector3();
 const weapon = new RaycastWeapon(camera, physics.world, decals, player.collider, {
   registry,
   tracers: playerTracers,
   sfx: audio,
-  impactFx: (point, dir, flesh) => {
-    _fxDir.copy(dir).multiplyScalar(-1);
-    if (flesh) {
-      particles.burst(point, _fxDir, 14, 0x8a1418, 3.5, 1.1, 0.5); // blood
-      particles.burst(point, _fxDir, 6, 0xff5a3c, 5.5, 1.6, 0.2); // bright hit sparks
-    } else {
-      particles.burst(point, _fxDir, 7, 0xb6a888, 2.6, 1.4, 0.3); // dust
-      particles.burst(point, _fxDir, 5, 0xffd27a, 5.0, 1.7, 0.16); // sparks
-    }
+  impactFx: (point, shotDir, surfaceNormal) => {
+    if (surfaceNormal) particles.surfaceImpact(point, surfaceNormal);
+    else particles.fleshImpact(point, shotDir); // exit spray continues along the shot
   },
+  muzzleFx: (point, dir) => particles.muzzleSmoke(point, dir),
   onHitmarker: (headshot, killed) => {
     hud.hitmarker(headshot, killed);
     audio.hitmarker(headshot);
@@ -111,6 +105,7 @@ const enemies = new EnemyManager({
   nav,
   registry,
   tracers: enemyTracers,
+  fx: particles,
   player,
   sfx: audio,
 });
@@ -160,6 +155,7 @@ function releasePointer(): void {
 function startGame(): void {
   spawnEnemies();
   player.respawn(spawn);
+  weapon.resetPose();
   missionTime = 0;
   qaFreeze = false;
   qaAim = false;
@@ -238,7 +234,6 @@ function applySettings(s: Settings): void {
 }
 applySettings(settings);
 menus.showMenu();
-
 // --- Loop ---
 const _fwd = new THREE.Vector3();
 const _up = new THREE.Vector3();
@@ -261,11 +256,11 @@ const loop = createFixedLoop(STEP_HZ, {
 
     if (input.isLocked && active) player.applyLook(fi.lookX, fi.lookY);
     weapon.update(
-      fx,
+      qaAim ? dt : fx, // QA ADS pose keeps animating the aim-in while the sim is frozen
       active ? fi.firePressed : 0,
       active && fi.fireHeld,
       active && input.isDown('KeyR'),
-      active && (fi.aimHeld || qaAim),
+      (active && fi.aimHeld) || qaAim,
     );
     const wantFov = 70 - 18 * weapon.adsFactor;
     if (Math.abs(camera.fov - wantFov) > 0.05) {
@@ -292,6 +287,7 @@ const loop = createFixedLoop(STEP_HZ, {
     if (active && enemies.aliveCount() === 0) win();
 
     hud.setVisible(playing);
+    hud.setAim(weapon.adsFactor);
     weapon.setVisible(playing);
     hud.setHealth(player.health, 100);
     hud.setObjective(`ELIMINATE HOSTILES — ${enemies.aliveCount()} / ${totalEnemies}`);
@@ -305,6 +301,8 @@ const loop = createFixedLoop(STEP_HZ, {
 renderer.setAnimationLoop(loop.frame);
 
 // --- QA states (drive the game into a playable pose for the critic harness) ---
+// Every gameplay state freezes the sim once posed: TRAA/GTAO need a few seconds of identical
+// frames to converge, and live bots would otherwise move (or kill the player) mid-capture.
 const _qaTmp = new THREE.Vector3();
 const _qaEye = new THREE.Vector3();
 const yawToward = (dx: number, dz: number): number => Math.atan2(-dx, -dz);
@@ -327,18 +325,21 @@ installQaHooks({
       startGame();
       player.setPose(14, 0.9, 13, yawToward(-1, -1), -0.12);
       player.updateCamera(1, 0, 0);
+      qaFreeze = true;
     },
     // Wide establishing shot: buildings, skyline, sky/sun agreement.
     vista: () => {
       startGame();
       player.setPose(-6, 0.9, 15.5, yawToward(0.55, -1), 0.06);
       player.updateCamera(1, 0, 0);
+      qaFreeze = true;
     },
     // Toward the west loading dock + ramp: concrete, props, shadowed facade.
     dock: () => {
       startGame();
       player.setPose(4, 0.9, 1, yawToward(-1, -0.55), -0.05);
       player.updateCamera(1, 0, 0);
+      qaFreeze = true;
     },
     // Aim-down-sights sight picture on a target.
     ads: () => {
@@ -348,6 +349,7 @@ installQaHooks({
       player.eye(_qaEye);
       if (enemies.nearestAlive(_qaEye, _qaTmp)) aimAt(from, _qaTmp);
       qaAim = true;
+      qaFreeze = true;
     },
     combat: () => {
       startGame();
@@ -361,6 +363,7 @@ installQaHooks({
         }
         aimAt(from, _qaTmp);
       }
+      qaFreeze = true;
     },
     // Freeze-frame the instant of firing so the (real, but transient) muzzle flash, tracer,
     // impact blood and hitmarker persist into the capture for the critic to judge.
@@ -377,6 +380,10 @@ installQaHooks({
         aimAt(from, _qaTmp);
         weapon.fireOnce(); // final shot: fresh flash / tracer / blood / hitmarker
       }
+      // Age the transient VFX ~70 ms so the frozen frame shows puffs/sparks/tracers mid-flight.
+      particles.update(0.07);
+      playerTracers.update(0.02);
+      enemyTracers.update(0.02);
       qaFreeze = true;
     },
   },

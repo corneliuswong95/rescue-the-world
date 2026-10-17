@@ -10,6 +10,7 @@ import { RAPIER } from '../physics/world';
 import type RAPIER_NS from '@dimforge/rapier3d-compat';
 import { DecalPool } from './decals';
 import { Viewmodel } from './viewmodel';
+import { MuzzleFlash } from '../vfx/muzzleFlash';
 import type { Tracers } from '../vfx/tracers';
 import type { HitRegistry } from '../combat/hittable';
 import type { Sfx } from '../audio/audio';
@@ -31,29 +32,14 @@ export interface WeaponHooks {
   registry: HitRegistry;
   tracers: Tracers;
   sfx: Sfx;
-  /** Spawn impact VFX at a hit point (`flesh` selects blood vs. dust/sparks). */
-  impactFx: (point: THREE.Vector3, dir: THREE.Vector3, flesh: boolean) => void;
+  /** Impact VFX at a hit point: `surfaceNormal` for hard surfaces, null for flesh. */
+  impactFx: (point: THREE.Vector3, shotDir: THREE.Vector3, surfaceNormal: THREE.Vector3 | null) => void;
+  /** Muzzle VFX (smoke wisp) at the muzzle's world position, firing along `dir`. */
+  muzzleFx: (point: THREE.Vector3, dir: THREE.Vector3) => void;
   /** Player landed a hit on something damageable. */
   onHitmarker: (headshot: boolean, killed: boolean) => void;
   /** Ammo changed (mag, reserve, reloading). */
   onAmmo: (mag: number, reserve: number, reloading: boolean) => void;
-}
-
-function makeFlashTexture(): THREE.CanvasTexture {
-  const s = 64;
-  const c = document.createElement('canvas');
-  c.width = c.height = s;
-  const ctx = c.getContext('2d')!;
-  const g = ctx.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
-  g.addColorStop(0, 'rgba(255,250,230,1)');
-  g.addColorStop(0.3, 'rgba(255,200,90,0.9)');
-  g.addColorStop(0.7, 'rgba(255,120,30,0.3)');
-  g.addColorStop(1, 'rgba(255,80,0,0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, s, s);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
 }
 
 export class RaycastWeapon {
@@ -67,9 +53,8 @@ export class RaycastWeapon {
 
   /** Carbine + gloved hands (createRifle('viewmodel') inside), attached to the camera. */
   private readonly viewmodel = new Viewmodel();
-  private readonly muzzleFlash: THREE.Mesh;
+  private readonly muzzleFlash = new MuzzleFlash(0.16);
   private readonly muzzleLight: THREE.PointLight;
-  private flashTimer = 0;
   private kick = 0;
   private ads = 0; // 0 hip … 1 aimed
 
@@ -99,19 +84,12 @@ export class RaycastWeapon {
   ) {
     this.camera.add(this.viewmodel.root);
 
-    const flashMat = new THREE.MeshBasicMaterial({
-      map: makeFlashTexture(),
-      transparent: true,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      depthTest: false,
-    });
-    this.muzzleFlash = new THREE.Mesh(new THREE.PlaneGeometry(0.55, 0.55), flashMat);
-    this.muzzleFlash.visible = false;
-    this.muzzleFlash.renderOrder = 4;
-    this.viewmodel.muzzle.add(this.muzzleFlash);
+    this.viewmodel.muzzle.add(this.muzzleFlash.root);
 
-    this.muzzleLight = new THREE.PointLight(0xffcf8a, 0, 9, 2);
+    // Flash light sits half a metre down-range: it lights the surroundings and the gun from the
+    // front, instead of blowing out the optic at inverse-square range.
+    this.muzzleLight = new THREE.PointLight(0xffc27a, 0, 8, 2);
+    this.muzzleLight.position.set(0, 0, -0.5);
     this.viewmodel.muzzle.add(this.muzzleLight);
 
     // Dim, short-range fill so the viewmodel always reads (standard FP treatment).
@@ -162,10 +140,7 @@ export class RaycastWeapon {
     const reload = this.reloadTimer > 0 ? 1 - this.reloadTimer / RELOAD_TIME : -1;
     this.viewmodel.update(dt, this.ads, this.kick, reload);
 
-    if (this.flashTimer > 0) {
-      this.flashTimer -= dt;
-      if (this.flashTimer <= 0) this.muzzleFlash.visible = false;
-    }
+    this.muzzleFlash.update(dt);
     this.muzzleLight.intensity = THREE.MathUtils.damp(this.muzzleLight.intensity, 0, 30, dt);
   }
 
@@ -183,6 +158,16 @@ export class RaycastWeapon {
     this.reserve -= take;
     this.reloadTimer = 0;
     this.hooks.onAmmo(this.mag, this.reserve, false);
+  }
+
+  /** Back to a neutral hip pose (new round / respawn): no carried-over ADS, kick or flash. */
+  resetPose(): void {
+    this.ads = 0;
+    this.kick = 0;
+    this.recoil.pitch = this.recoil.yaw = 0;
+    this.muzzleFlash.hide();
+    this.muzzleLight.intensity = 0;
+    this.viewmodel.update(0, 0, 0, -1);
   }
 
   /** Fire a single shot immediately, ignoring cooldown/ammo (QA harness only). */
@@ -216,13 +201,13 @@ export class RaycastWeapon {
         const headshot = this._hit.y >= target.headY();
         const dmg = BODY_DAMAGE * (headshot ? HEAD_MULT : 1);
         const killed = target.onHit(dmg, this._hit, headshot);
-        this.hooks.impactFx(this._hit, this._dir, true);
+        this.hooks.impactFx(this._hit, this._dir, null);
         this.hooks.sfx.impact(this._hit, true);
         this.hooks.onHitmarker(headshot, killed);
       } else {
         this._normal.set(hit.normal.x, hit.normal.y, hit.normal.z);
         this.decals.spawn(this._hit, this._normal);
-        this.hooks.impactFx(this._hit, this._dir, false);
+        this.hooks.impactFx(this._hit, this._dir, this._normal);
         this.hooks.sfx.impact(this._hit, false);
       }
       endPoint = this._hit;
@@ -232,12 +217,10 @@ export class RaycastWeapon {
 
     this.viewmodel.muzzle.getWorldPosition(this._muzzleWorld);
     this.hooks.tracers.spawn(this._muzzleWorld, endPoint);
+    this.hooks.muzzleFx(this._muzzleWorld, this._dir);
 
-    this.muzzleFlash.visible = true;
-    this.muzzleFlash.rotation.z = Math.random() * Math.PI;
-    this.muzzleFlash.scale.setScalar(1.0 + Math.random() * 0.6);
-    this.flashTimer = 0.055;
-    this.muzzleLight.intensity = 10;
+    this.muzzleFlash.fire();
+    this.muzzleLight.intensity = 3;
 
     const steady = 1 - 0.4 * this.ads;
     this.recoil.pitch += 0.016 * steady;

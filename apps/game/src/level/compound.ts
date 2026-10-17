@@ -199,9 +199,12 @@ export function buildLevel(
   props.place('water_manhole_cover', { x: 3.4, y: 0.012, z: 2.8, collide: false });
   props.place('water_manhole_cover', { x: -7.8, y: 0.012, z: -12.6, collide: false });
 
-  geo.build(root);
-  kit.build(root);
-  props.build(root);
+  for (const [name, part] of [['ground', geo], ['facades', kit], ['props', props]] as const) {
+    const g = new THREE.Group();
+    g.name = name;
+    part.build(g);
+    root.add(g);
+  }
   return { navMeshes: col.navMeshes };
 }
 

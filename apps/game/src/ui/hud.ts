@@ -12,6 +12,8 @@ export interface Hud {
   damageFrom(relAngleRad: number): void;
   setObjective(text: string): void;
   setMessage(text: string | null): void;
+  /** 0 hip … 1 aimed: the crosshair fades out as the optic takes over. */
+  setAim(factor: number): void;
   update(dt: number): void;
 }
 
@@ -81,6 +83,7 @@ export function createHud(): Hud {
     rgba(255,40,40,0));border-radius:50%"></div>`;
   hudRoot.appendChild(dmgDir);
   let dmgTimer = 0;
+  let aimStep = -1; // last written crosshair opacity step (avoid per-frame style writes)
 
   return {
     setVisible(visible) {
@@ -123,6 +126,12 @@ export function createHud(): Hud {
       } else {
         message.style.opacity = '0';
       }
+    },
+    setAim(factor) {
+      const step = Math.round(Math.max(0, 1 - factor * 1.6) * 10);
+      if (step === aimStep) return;
+      aimStep = step;
+      crosshair.style.opacity = `${step / 10}`;
     },
     update(dt) {
       if (hitTimer > 0) {

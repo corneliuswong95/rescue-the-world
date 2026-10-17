@@ -13,6 +13,8 @@ import type RAPIER_NS from '@dimforge/rapier3d-compat';
 import type { Navigation } from './navmesh';
 import type { HitRegistry, Hittable } from '../combat/hittable';
 import type { Tracers } from '../vfx/tracers';
+import type { ParticleFx } from '../vfx/particles';
+import { MuzzleFlash } from '../vfx/muzzleFlash';
 import type { Sfx } from '../audio/audio';
 import { Soldier, type AnimState } from './soldier';
 import type { Archetype } from './archetypes';
@@ -30,6 +32,7 @@ export interface EnemyDeps {
   nav: Navigation;
   registry: HitRegistry;
   tracers: Tracers; // reddish enemy tracers
+  fx: ParticleFx; // muzzle smoke
   player: PlayerTarget;
   sfx: Sfx;
 }
@@ -66,8 +69,8 @@ export class Enemy implements Hittable {
   private deathTimer = 0;
   private readonly lastKnown = new THREE.Vector3();
 
-  private readonly muzzleFlash: THREE.Mesh;
-  private flashTimer = 0;
+  // Oversized vs. real (~0.25 m) so a shooter reads at 30 m — standard FPS readability cheat.
+  private readonly muzzleFlash = new MuzzleFlash(0.5);
   private readonly character: Soldier;
   private animState: AnimState = 'idle';
   private hp: number;
@@ -113,15 +116,7 @@ export class Enemy implements Hittable {
     this.controller.enableSnapToGround(0.4);
     this.controller.setMaxSlopeClimbAngle((50 * Math.PI) / 180);
 
-    const flashMat = new THREE.MeshBasicMaterial({
-      color: 0xffd27a,
-      transparent: true,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    });
-    this.muzzleFlash = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.22), flashMat);
-    this.muzzleFlash.visible = false;
-    this.character.muzzleAnchor.add(this.muzzleFlash); // at the rifle muzzle
+    this.character.muzzleAnchor.add(this.muzzleFlash.root); // at the rifle muzzle
   }
 
   get alive(): boolean {
@@ -155,7 +150,7 @@ export class Enemy implements Hittable {
     this.vel.set(0, 0, 0);
     this.deps.registry.unregister(this.collider.handle);
     this.collider.setSensor(true); // no longer blocks shots/movement
-    this.muzzleFlash.visible = false;
+    this.muzzleFlash.hide();
     this.deps.sfx.enemyDeath(this.pos);
   }
 
@@ -231,10 +226,7 @@ export class Enemy implements Hittable {
     const moving = Math.hypot(this.vel.x, this.vel.z) > 0.4;
     this.animState = moving ? 'run' : 'idle';
 
-    if (this.flashTimer > 0) {
-      this.flashTimer -= dt;
-      if (this.flashTimer <= 0) this.muzzleFlash.visible = false;
-    }
+    this.muzzleFlash.update(dt);
   }
 
   private tickPatrol(dt: number, sees: boolean): void {
@@ -393,9 +385,8 @@ export class Enemy implements Hittable {
     this.character.muzzleAnchor.getWorldPosition(this._muzzle);
     this.deps.tracers.spawn(this._muzzle, this._end);
     this.deps.sfx.gunshot(this._muzzle);
-    this.muzzleFlash.visible = true;
-    this.muzzleFlash.scale.setScalar(0.8 + Math.random() * 0.5);
-    this.flashTimer = 0.05;
+    this.muzzleFlash.fire(0.05);
+    this.deps.fx.muzzleSmoke(this._muzzle, this._toPlayer);
   }
 
   /** Per-frame visual update (interpolated). Returns false when fully cleaned up. */
@@ -419,11 +410,9 @@ export class Enemy implements Hittable {
   /** Remove from scene + physics. Called on death cleanup and on level reset. */
   dispose(): void {
     this.deps.scene.remove(this.group);
-    // The character clone SHARES geometry/materials with the template — only stop its mixer;
-    // never dispose those shared resources. Dispose only this enemy's own muzzle-flash assets.
+    // Character + muzzle-flash geometry/materials are shared across enemies; the soldier only
+    // releases its per-instance resources.
     this.character.dispose();
-    this.muzzleFlash.geometry.dispose();
-    (this.muzzleFlash.material as THREE.Material).dispose();
     this.deps.world.removeCollider(this.collider, false);
     this.deps.world.removeRigidBody(this.body);
     this.deps.world.removeCharacterController(this.controller);

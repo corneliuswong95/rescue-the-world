@@ -42,7 +42,14 @@ export class AudioEngine implements Sfx {
       this.ctx = new Ctor();
       this.master = this.ctx.createGain();
       this.master.gain.value = 0.6;
-      this.master.connect(this.ctx.destination);
+      // Brick-wall-ish limiter: full-auto stacks voices; never clip the output.
+      const limiter = this.ctx.createDynamicsCompressor();
+      limiter.threshold.value = -6;
+      limiter.knee.value = 2;
+      limiter.ratio.value = 12;
+      limiter.attack.value = 0.002;
+      limiter.release.value = 0.12;
+      this.master.connect(limiter).connect(this.ctx.destination);
       this.sfxBus = this.ctx.createGain();
       this.sfxBus.gain.value = 1.0;
       this.sfxBus.connect(this.master);
@@ -222,8 +229,10 @@ export class AudioEngine implements Sfx {
     const dest = this.sends(dry, own ? 0.45 : 0.8, own ? 0.5 : 0.3);
     const loud = own ? 0.95 : 0.65;
     const jitter = 0.92 + Math.random() * 0.16;
-    this.noiseBurst(dest, t, { filter: 'highpass', freq: 4200, q: 0.4, gain: loud * 0.55, decay: 0.018 }); // crack
-    this.noiseBurst(dest, t, { filter: 'bandpass', freq: 1100 * jitter, q: 0.7, gain: loud * 0.8, decay: own ? 0.1 : 0.14 }); // body
+    if (own) this.duckAmbience(t);
+    this.noiseBurst(dest, t, { filter: 'highpass', freq: 3800, q: 0.4, gain: loud * 1.1, decay: 0.03 }); // crack
+    this.noiseBurst(dest, t, { filter: 'bandpass', freq: 2600 * jitter, q: 0.9, gain: loud * 1.3, decay: 0.05 }); // bite (1–5 kHz)
+    this.noiseBurst(dest, t, { filter: 'bandpass', freq: 1100 * jitter, q: 0.7, gain: loud * 0.9, decay: own ? 0.1 : 0.14 }); // body
     this.noiseBurst(dest, t, { filter: 'lowpass', freq: 420, q: 0.5, gain: loud * 0.7, decay: 0.16 }); // blast
     this.thump(dest, t, 120 * jitter, 42, loud * (own ? 1.1 : 0.6), 0.14); // thump
     if (own) this.noiseBurst(dest, t + 0.028, { filter: 'bandpass', freq: 3600, q: 2.5, gain: 0.22, decay: 0.012 }); // bolt
@@ -333,14 +342,26 @@ export class AudioEngine implements Sfx {
   }
 
   private ambienceOn = false;
+  private ambienceBus: GainNode | null = null;
+  private static readonly AMBIENCE_LEVEL = 0.035; // ≈ −40 dBFS bed: under gunfire, not over it
+
+  /** Dip the ambience ~4 dB under the player's own fire, recovering over ~0.6 s. */
+  private duckAmbience(t: number): void {
+    const g = this.ambienceBus?.gain;
+    if (!g) return;
+    g.cancelScheduledValues(t);
+    g.setTargetAtTime(AudioEngine.AMBIENCE_LEVEL * 0.63, t, 0.01);
+    g.setTargetAtTime(AudioEngine.AMBIENCE_LEVEL, t + 0.08, 0.25);
+  }
   /** Start the low ambience bed (drone + wind). Idempotent. */
   startAmbience(): void {
     if (!this.ctx || this.ambienceOn) return;
     this.ambienceOn = true;
     const ctx = this.ctx;
     const bus = ctx.createGain();
-    bus.gain.value = 0.14;
+    bus.gain.value = AudioEngine.AMBIENCE_LEVEL;
     bus.connect(this.master!);
+    this.ambienceBus = bus;
     const lp = ctx.createBiquadFilter();
     lp.type = 'lowpass';
     lp.frequency.value = 340;

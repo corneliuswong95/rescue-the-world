@@ -36,3 +36,28 @@ highest-leverage next task.
 | M3 | — | Player weapon is still the procedural box viewmodel — no CC0 gun model was auto-fetchable. | Integrate a CC0 rifle glTF on a separate-FOV viewmodel layer (also fixes the M1 world-clip row). | Resolved (realism pass): detailed code-authored carbine + gloved hands |
 | M3 | — | glTF/texture assets ship uncompressed (small M3 set, measured well under the 1.5 GB GPU-memory budget). Rule 8 wants KTX2/Draco/meshopt before scale. | Add a `gltf-transform` step (Draco + meshopt + KTX2) once the asset set grows in M4. | Deferred |
 | M3 | qa/shots/M3/overview.png | 4 skinned characters ≈ 209 draw calls. Fine now, but scales linearly with enemy count. | Batch/instance skinned meshes or cap concurrent live enemies for larger fights (M4). | Superseded: non-skinned soldiers, 12 draws each |
+
+## Realism pass (2026-10-17) — designer + gamer review gate (3 cycles, terminated)
+
+Two independent review agents (art director, hardcore FPS player) scored every cycle:
+designer **2.3 → 2.9 → 3.25**, gamer **2.2 → 2.9 → 3.3**. Cycle-3 tuning fixes (fire cancels
+sprint, brass, audio mix/limiter, eye relief, tracer stub, edge wear, glass variety, floor-hit
+kick, late-afternoon sky) shipped after the last scoring. Perf (M1 — below target class —
+WebGPU, 1080p, prod): high ≈ 60 fps, medium ≈ 77 fps; boot→menu 3.6 s on localhost; DEPLOY
+max frame ≈ 67 ms. Both reviewers place the remaining gap in content/art-pipeline work, not
+tuning. Residuals, highest leverage first:
+
+| Area | Issue | Suggested fix | Status |
+|---|---|---|---|
+| Characters | Code-authored rigid-segment soldiers cap realism (~2.5–3/5): smooth tube limbs, mannequin faces up close. | Skinned base (CC0 MakeHuman/Quaternius, or Mixamo via the user's Adobe account) + Mixamo idle/run/aim/hit/death; reuse code-built gear as bone attachments. | Blocked on asset/account |
+| First-person | Rifle + gloves are procedural; support hand reads as a clamp, hip finish still CAD-ish. | Authored high-poly → low-poly rifle and arms with baked normal/AO/curvature; hand-keyed reloads. | Deferred (art pipeline) |
+| Viewmodel | Shares the 62° world projection; wall-bump hides most but not all clipping. | Separate viewmodel projection (vertex-stage proj override or overlay pass) with zero velocity. | Deferred |
+| Lighting | GTAO multiplies sunlit pixels too. | Depth/normal pre-pass + `builtinAOContext` so AO only hits indirect light (budget ~+130 draws). | Deferred |
+| Load | ~26 MB payload (WebP, not KTX2): fine on localhost, ~6–9 s on 50 Mbps broadband. | KTX2/Basis via toktx in `tools/assets`, prioritised loading (facade + core first). | Deferred |
+| Layout | Symmetric 40 m box; cover reads as islands; ~10–15 s rounds. | Open one bay into an alley with distant silhouettes + second landmark; linked cover lanes (pallets, IBC totes, sandbags, container); dock canopies; second wave/objective. | Deferred (content) |
+| AI | Bots never flank, push or use grenades/cover. | Flank after 6 s of player in cover; grenade flush; cover scoring. | Deferred |
+| Surfaces | Asphalt crack columns still faintly repeat from height. | Rotated/hex-tiled second sample + tar-seam/patch decals. | Deferred |
+| VFX | Flash is a procedural star; no flipbooks; floor decals don't stretch at grazing angles. | Offline flipbook flash/smoke; grazing-angle decal stretch + light chipped rim. | Deferred |
+| Perf | M1 combat dips to 52–57 fps with some 33 ms frames; rare 167–833 ms DEPLOY outliers. | Dynamic resolution (0.8–1.0); trace the outlier compiles. | Deferred |
+| Audio | Procedural gunfire (now layered + limited) still lacks recorded character. | CC0 recorded layers (Freesound/Sonniss, logged in CREDITS) on the same bus/reverb. | Deferred |
+| UI | Damage arc is a ring segment, not edge chevrons. | Segmented edge chevrons. | Deferred |

@@ -23,7 +23,7 @@ import { createArm, handRotation, wristFor, type HandSpec } from './hands';
  * Eye → optic centre at full ADS (m): the housing stays well under a quarter of the screen
  * width at the ~46° ADS field of view, leaving a clear field around the target.
  */
-const EYE_RELIEF = 0.24;
+const EYE_RELIEF = 0.19; // optic window ≈ 20% of screen height without the housing dominating
 
 const smooth = (t: number, a: number, b: number): number => {
   const x = THREE.MathUtils.clamp((t - a) / (b - a), 0, 1);

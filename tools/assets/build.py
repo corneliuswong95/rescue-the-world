@@ -45,7 +45,7 @@ MODELS = {
     "modular_fire_escape": (1024, 0.0005, False),
 }
 TEXTURES = ["asphalt_02", "dirty_concrete", "concrete_wall_008"]
-HDRIS = ["kloofendal_38d_partly_cloudy_puresky"]
+HDRIS = ["qwantani_late_afternoon_puresky"]
 
 WEBP_JS = """
 import sharp from 'sharp';

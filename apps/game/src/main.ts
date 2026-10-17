@@ -94,7 +94,7 @@ const player = new Player(physics.world, input, camera, spawn);
 
 const registry = new HitRegistry();
 const decals = new DecalPool(scene);
-const playerTracers = new Tracers(scene, 32, 0xffe08a, 3, 3); // own fire: every 3rd round
+const playerTracers = new Tracers(scene, 32, 0xffe08a, 3, 3, 3.5); // own fire: every 3rd round, from 3.5 m out
 const enemyTracers = new Tracers(scene, 48, 0xff7a3c, 5); // incoming fire: reads clearly
 const particles = new ParticleFx(scene);
 const hud = createHud();
@@ -182,6 +182,7 @@ function startGame(): void {
   // Fresh round: no leftover tracers, puffs or bullet holes from the last one.
   playerTracers.clear();
   enemyTracers.clear();
+  hud.reset();
   particles.clear();
   particles.warmPlume(STACK_TOP, 10);
   decals.clear();
@@ -393,7 +394,7 @@ const loop = createFixedLoop(STEP_HZ, {
     if (active && enemies.aliveCount() === 0) win();
 
     hud.setVisible(playing);
-    hud.setAim(weapon.adsFactor);
+    hud.setAim(player.sprinting ? 1 : weapon.adsFactor); // no crosshair while sprinting or aimed
     hud.setSpread(
       (window.innerHeight / 2) * (Math.tan(THREE.MathUtils.degToRad(weapon.spreadDeg) / 2) /
         Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)),

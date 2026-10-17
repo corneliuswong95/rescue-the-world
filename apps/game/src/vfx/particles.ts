@@ -182,17 +182,18 @@ class Pool {
 const SPARK: Spawn = { speed: 7, spread: 1.3, life: 0.22, size0: 0.035, size1: 0.012, gravity: 9.8, drag: 1.5, alpha: 1 };
 const CHIP: Spawn = { speed: 3.2, spread: 1.4, life: 0.5, size0: 0.03, size1: 0.025, gravity: 9.8, drag: 0.6, alpha: 1 };
 const DUST: Spawn = { speed: 0.9, spread: 1.1, life: 1.1, size0: 0.12, size1: 0.75, gravity: -0.15, drag: 2.2, alpha: 0.38 };
-const MIST: Spawn = { speed: 1.4, spread: 0.9, life: 0.38, size0: 0.08, size1: 0.42, gravity: 0.4, drag: 3.5, alpha: 0.75 };
+const MIST: Spawn = { speed: 1.4, spread: 0.9, life: 0.32, size0: 0.06, size1: 0.28, gravity: 0.4, drag: 3.5, alpha: 0.7 };
 const DROPS: Spawn = { speed: 3.4, spread: 0.8, life: 0.45, size0: 0.022, size1: 0.018, gravity: 9.8, drag: 0.4, alpha: 0.95 };
-const KICK: Spawn = { speed: 2.2, spread: 0.7, life: 0.9, size0: 0.15, size1: 0.6, gravity: 2.5, drag: 1.8, alpha: 0.5 };
+const KICK: Spawn = { speed: 3.4, spread: 0.45, life: 0.7, size0: 0.18, size1: 0.75, gravity: 3.5, drag: 1.6, alpha: 0.6 };
 const PLUME: Spawn = { speed: 0.7, spread: 0.35, life: 11, size0: 1.4, size1: 7.5, gravity: -0.12, drag: 0.08, alpha: 0.2 };
 const SMOKE: Spawn = { speed: 0.5, spread: 0.6, life: 0.9, size0: 0.05, size1: 0.32, gravity: -0.25, drag: 2.5, alpha: 0.18 };
 
 const SPARK_COL = new THREE.Color(1.0, 0.62, 0.25);
 const DUST_COL = new THREE.Color(0.34, 0.32, 0.29); // unlit: keep it below lit-concrete brightness
+const KICK_COL = new THREE.Color(0.5, 0.47, 0.42); // pale grit thrown off dark asphalt — reads at 8 m
 const CHIP_COL = new THREE.Color(0.26, 0.24, 0.22);
-const BLOOD_COL = new THREE.Color(0.28, 0.02, 0.02);
-const SMOKE_COL = new THREE.Color(0.62, 0.62, 0.6);
+const BLOOD_COL = new THREE.Color(0.16, 0.015, 0.015);
+const SMOKE_COL = new THREE.Color(0.42, 0.42, 0.41);
 const PLUME_COL = new THREE.Color(0.55, 0.55, 0.56);
 
 export class ParticleFx {
@@ -213,7 +214,10 @@ export class ParticleFx {
     this._d.copy(normal).multiplyScalar(0.6).add(this._up).normalize();
     this.soft.emit(point, this._d, 7, DUST_COL, 1, DUST);
     // Floor hits throw a visible dirt kick (otherwise strikes on dark asphalt vanish at range).
-    if (normal.y > 0.7) this.soft.emit(point, this._up, 5, DUST_COL, 1, KICK);
+    if (normal.y > 0.7) {
+      this.soft.emit(point, this._up, 6, KICK_COL, 1, KICK);
+      this.soft.emit(point, normal, 5, CHIP_COL, 1, CHIP);
+    }
   }
 
   /** Pre-simulate `seconds` of plume (after clear()) so it's already streaming. */
@@ -232,7 +236,7 @@ export class ParticleFx {
 
   /** Bullet into a body: dark-red mist spray along the shot + falling droplets. */
   fleshImpact(point: THREE.Vector3, shotDir: THREE.Vector3): void {
-    this.soft.emit(point, shotDir, 6, BLOOD_COL, 1, MIST);
+    this.soft.emit(point, shotDir, 4, BLOOD_COL, 1, MIST);
     this.soft.emit(point, shotDir, 8, BLOOD_COL, 1, DROPS);
   }
 

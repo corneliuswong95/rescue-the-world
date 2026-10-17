@@ -11,6 +11,7 @@ const GRAVITY = 9.81;
 const LIFE = 2.2; // seconds until gone
 const FADE = 0.35; // final shrink-out
 const SPEED = 4;
+const NEAR_CULL = 0.38; // m from the eye
 
 /** Bottleneck case: rim, body, shoulder, neck — ~45 mm long, ~9.6 mm across. */
 function caseGeometry(): THREE.BufferGeometry {
@@ -47,7 +48,8 @@ export class BrassPool {
   private readonly _s = new THREE.Vector3();
 
   constructor() {
-    const mat = new THREE.MeshStandardNodeMaterial({ color: 0xb48f55, metalness: 1, roughness: 0.32 });
+    // Fired brass is tarnished, not mirror-bright.
+    const mat = new THREE.MeshStandardNodeMaterial({ color: 0xa8854f, metalness: 0.8, roughness: 0.45 });
     this.mesh = new THREE.InstancedMesh(caseGeometry(), mat, COUNT);
     this.mesh.frustumCulled = false; // instances span the play space; bounds aren't tracked
     this.mesh.castShadow = false;
@@ -59,10 +61,10 @@ export class BrassPool {
   /**
    * Ejects a casing at world `port`, thrown along world `dir` (unit), recycling the oldest.
    */
-  eject(port: THREE.Vector3, dir: THREE.Vector3): void {
+  eject(port: THREE.Vector3, dir: THREE.Vector3, speedScale = 1): void {
     const i = this.next;
     this.next = (i + 1) % COUNT;
-    const s = SPEED * (0.85 + Math.random() * 0.3);
+    const s = SPEED * speedScale * (0.85 + Math.random() * 0.3);
     this.pos[i * 3] = port.x;
     this.pos[i * 3 + 1] = port.y;
     this.pos[i * 3 + 2] = port.z;
@@ -77,8 +79,11 @@ export class BrassPool {
     this.bounced[i] = 0;
   }
 
-  /** Integrates every live casing against a horizontal ground plane at `groundY`. */
-  update(dt: number, groundY: number): void {
+  /**
+   * Integrates every live casing against a horizontal ground plane at `groundY`. Casings within
+   * NEAR_CULL of `eye` are hidden: at that range they'd fill the sight picture.
+   */
+  update(dt: number, groundY: number, eye: THREE.Vector3): void {
     if (dt <= 0) return;
     let dirty = false;
     for (let i = 0; i < COUNT; i++) {
@@ -114,8 +119,9 @@ export class BrassPool {
           }
         }
       }
-      const shrink = THREE.MathUtils.clamp((LIFE - this.age[i]) / FADE, 0, 1);
       this._p.set(this.pos[k], this.pos[k + 1], this.pos[k + 2]);
+      const near = this._p.distanceToSquared(eye) < NEAR_CULL * NEAR_CULL;
+      const shrink = near ? 0 : THREE.MathUtils.clamp((LIFE - this.age[i]) / FADE, 0, 1);
       this._q.setFromEuler(this._e.set(this.rot[k], this.rot[k + 1], this.rot[k + 2]));
       this._s.setScalar(shrink);
       this._m.compose(this._p, this._q, this._s);

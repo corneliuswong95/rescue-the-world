@@ -36,6 +36,9 @@ export class Tracers {
     color: THREE.ColorRepresentation = 0xffd27a,
     hdr = 5,
     private readonly every = 1,
+    /** Metres of the path near the muzzle never drawn (the player's own tracers start ahead of
+     * the viewmodel, or a world-space stub hangs beside the gun once it kicks/moves). */
+    private readonly minTail = 0,
   ) {
     // Two crossed ribbons, origin at the tail → scale.y is the visible length.
     const a = new THREE.PlaneGeometry(0.03, 1).translate(0, 0.5, 0);
@@ -99,7 +102,7 @@ export class Tracers {
 
   private place(it: Tracer): void {
     const head = Math.min(it.head + 0.6, it.length); // a short lead so frame 0 is visible
-    const tail = Math.max(0, it.head - STREAK);
+    const tail = Math.max(this.minTail, it.head - STREAK);
     const len = head - tail;
     it.mesh.visible = len > 1e-3;
     it.mesh.position.copy(it.from).addScaledVector(it.dir, tail);

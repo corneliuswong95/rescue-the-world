@@ -122,6 +122,7 @@ export class RaycastWeapon {
   private cooldown = 0;
   private prevReload = false;
   private aimHeld = false;
+  private triggerHeld = false;
 
   /** Carbine + gloved hands (createRifle('viewmodel') inside), attached to the camera. */
   private readonly viewmodel = new Viewmodel();
@@ -171,9 +172,12 @@ export class RaycastWeapon {
     return THREE.MathUtils.lerp(1, ADS_MOVE_SCALE, this.ads);
   }
 
-  /** Whether the player may sprint right now (not while aiming). */
+  /**
+   * Whether the player may sprint right now: not while aiming, and not while the trigger is held
+   * — pulling the trigger cancels a sprint (genre habit), starting the sprint-out immediately.
+   */
   get sprintAllowed(): boolean {
-    return !this.aimHeld && this.ads < 0.25;
+    return !this.aimHeld && !this.triggerHeld && this.ads < 0.25;
   }
 
   /** Player sprint state (feed `player.sprinting` every frame). */
@@ -251,6 +255,7 @@ export class RaycastWeapon {
     this.sinceShot += dt;
     this.sprintOut = Math.max(0, this.sprintOut - dt);
     this.aimHeld = aimHeld;
+    this.triggerHeld = fireHeld || firePressed > 0;
 
     if (reloadHeld && !this.prevReload) this.startReload();
     this.prevReload = reloadHeld;
@@ -312,7 +317,7 @@ export class RaycastWeapon {
 
     if (!this.brass.mesh.parent) this.attachBrass();
     const ground = this.groundY ?? this._rayOrigin.y - EYE_HEIGHT;
-    this.brass.update(dt, ground);
+    this.brass.update(dt, ground, this._rayOrigin);
   }
 
   /** Brass lives in world space: hang it off the scene root once the camera is in a scene. */
@@ -451,12 +456,13 @@ export class RaycastWeapon {
     this.lightReach = aimed ? 1.2 : 0.5;
     this.muzzleLight.intensity = aimed ? 1.2 : 6;
 
-    // Brass: out of the ejection port, back-right and a little up.
+    // Brass: out of the ejection port, back-right and a little up; aimed, thrown harder, right
+    // and down so casings clear the sight picture fast.
     const port = this.viewmodel.ejectionPort;
     port.getWorldPosition(this._port);
     port.getWorldQuaternion(this._portQ);
-    this._eject.set(0.88, 0.42, 0.24).normalize().applyQuaternion(this._portQ);
-    this.brass.eject(this._port, this._eject);
+    this._eject.set(0.88, aimed ? -0.05 : 0.42, 0.24).normalize().applyQuaternion(this._portQ);
+    this.brass.eject(this._port, this._eject, aimed ? 1.6 : 1);
 
     // Recoil along the pattern: split into transient view kick + permanent aim change.
     const n = this.shotIndex;

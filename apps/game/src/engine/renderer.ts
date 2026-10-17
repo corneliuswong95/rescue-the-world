@@ -21,7 +21,7 @@ export async function createRenderer(container: HTMLElement): Promise<RendererBu
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 0.9;
+  renderer.toneMappingExposure = 1.0; // late-afternoon sky: keep the long shade readable
   container.appendChild(renderer.domElement);
 
   // WebGPURenderer must init before first render; this is where the WebGL2 fallback is chosen.

@@ -88,7 +88,7 @@ function bumpNormal(height: F): V3 {
 /** Noise-broken edge wear (0 … 1) on masked bevels: long rubbed patches, never a dashed line. */
 function edgeWear(scale: number): F {
   const n = mx_fractal_noise_float(P.mul(scale), 2, 2.0, 0.5);
-  return edgeMask.mul(smoothstep(-0.18, 0.22, n));
+  return edgeMask.mul(smoothstep(0.12, 0.42, n)); // sparse rubbed patches (~20% of edges)
 }
 
 /** Diamond knurl height (~0.9 mm pitch) on KNURL surfaces, faded once sub-pixel. */
@@ -123,7 +123,7 @@ function coatedMetal(spec: CoatingSpec): THREE.MeshPhysicalNodeMaterial {
   const tone = mx_fractal_noise_float(P.mul(12), 2, 2, 0.5);
   // Knurled bands: rougher and a touch darker than the smooth anodise around them.
   m.colorNode = mix(tint.mul(tone.mul(0.12).add(1)).mul(knurl.mul(-0.2).add(1)), spec.bare, wear);
-  m.roughnessNode = mix(roughnessVariation().add(spec.roughness).add(knurl.mul(0.12)), float(0.35), wear);
+  m.roughnessNode = mix(roughnessVariation().add(spec.roughness).add(knurl.mul(0.12)), float(0.45), wear);
   m.metalnessNode = wear;
   m.specularIntensityNode = float(COATING_SPECULAR);
   m.normalNode = bumpNormal(spec.relief.add(knurlRelief()));
@@ -134,14 +134,14 @@ function anodisedAluminium(): THREE.MeshPhysicalNodeMaterial {
   // Bead-blast texture (~2 mm) + faint machining waviness (~7 mm).
   const blast = mx_noise_float(P.mul(480)).mul(0.000032).mul(resolve(0.0021));
   const wave = mx_noise_float(P.mul(140)).mul(0.00005).mul(resolve(0.007));
-  return coatedMetal({ roughness: 0.7, bare: vec3(0.46, 0.47, 0.5), wearScale: 22, relief: blast.add(wave) });
+  return coatedMetal({ roughness: 0.7, bare: vec3(0.27, 0.275, 0.29), wearScale: 22, relief: blast.add(wave) });
 }
 
 function phosphateSteel(): THREE.MeshPhysicalNodeMaterial {
   // Crystalline phosphate (~1.5 mm) over a slightly hammered forging.
   const crystals = mx_worley_noise_float(P.mul(650)).mul(0.000028).mul(resolve(0.0015));
   const forge = mx_noise_float(P.mul(120)).mul(0.00005).mul(resolve(0.008));
-  return coatedMetal({ roughness: 0.68, bare: vec3(0.42, 0.42, 0.44), wearScale: 30, relief: crystals.add(forge) });
+  return coatedMetal({ roughness: 0.68, bare: vec3(0.25, 0.25, 0.26), wearScale: 30, relief: crystals.add(forge) });
 }
 
 function texturedPolymer(): THREE.MeshPhysicalNodeMaterial {

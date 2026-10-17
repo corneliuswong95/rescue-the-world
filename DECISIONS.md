@@ -70,3 +70,27 @@ Decision:
   ancestor folders and hung on an iCloud-evicted `@types` file outside the repo.
 Consequences: Asset download ≈ 25 MB (models 11 MB, textures 9 MB, HDRI 5 MB) — inside the < 5 s
 broadband target but worth watching. Swapping the HDRI automatically re-aims the sun.
+
+## 2026-10-17 — Realism pass follow-ups: perf + review cycles
+
+Context: Designer + gamer review agents scored the first realism build 2.3 / 2.2 and drove two
+fix cycles (PLAN §7 cap of 3). Several fixes are architectural:
+Decision:
+- **Post tiers:** high = MRT (colour, 8-bit normals, velocity) + GTAO + bloom + TRAA + sharpen;
+  medium = plain pass + bloom + FXAA. Post passes use `samples: 0` (AA comes from TRAA/FXAA; an
+  inherited 4× MSAA on the HDR MRT targets was the single biggest GPU cost and broke TRAA's depth
+  copy on WebGPU). Transparent VFX write alpha 0 into the G-buffer attachments, which use
+  material blending, so they never corrupt GTAO/TRAA inputs.
+- **Baked light probe:** the yard's local probe (bounce + reflections) is baked offline
+  (`tools/assets/bake-probe.mjs`) as the PMREM cube-UV atlas (half-float, 1.6 MB) and loaded as a
+  pre-filtered environment; a live bake is the fallback. Re-bake when the level, lighting or
+  three.js version changes.
+- **Constant light set:** no light may live under an object whose visibility toggles (the
+  viewmodel's muzzle light did → every material rebuilt on DEPLOY). Lights hang off the camera.
+- **Prewarm:** only the active tier's passes are compiled at boot; a tier switch compiles once.
+- **CSS-pixel resolution on every tier** (TRAA/FXAA + sharpen), so retina panels don't pay 2–4×
+  fill for little gain.
+- **Bots are pooled** (built once, parked/reactivated per round).
+Consequences: M1 (below target class), WebGPU, 1080p: high ≈ 60 fps, medium ≈ 75 fps; prod
+boot→menu ≈ 4.5 s on localhost (asset payload ≈ 26 MB still needs KTX2/streaming for the < 5 s
+broadband target — backlogged).

@@ -106,10 +106,18 @@ export class FacadeKit {
   private weather(kitScene: THREE.Object3D): void {
     const glass = new THREE.MeshStandardNodeMaterial();
     const pane = hash(instanceIndex); // one value per window instance
-    const dead = smoothstep(0.89, 0.91, pane); // ~10% grimed-over / boarded-dark panes
+    // Bands of the per-window value: clean glossy (mirrors the probe), dusty, frosted /
+    // painted-over (~15%, pale), and boarded with weathered plywood (~4%).
+    const frosted = smoothstep(0.8, 0.81, pane).mul(float(1).sub(smoothstep(0.95, 0.96, pane)));
+    const boarded = smoothstep(0.96, 0.965, pane);
     const lowInFloor = float(1).sub(positionWorld.y.sub(0.15).div(3).fract()); // dirt pools at the sill
-    glass.colorNode = mix(vec3(0.03, 0.036, 0.04).mul(pane.mul(0.6).add(0.7)), vec3(0.05, 0.045, 0.04), dead);
-    glass.roughnessNode = mix(float(0.05), float(0.45), pane).add(lowInFloor.mul(0.12)).add(dead.mul(0.5)).min(1);
+    const clear = vec3(0.028, 0.034, 0.04).mul(pane.mul(0.8).add(0.6));
+    glass.colorNode = mix(mix(clear, vec3(0.2, 0.21, 0.2), frosted), vec3(0.2, 0.15, 0.1), boarded);
+    glass.roughnessNode = mix(float(0.05), float(0.35), pane.mul(1.25).min(1))
+      .add(lowInFloor.mul(0.12))
+      .add(frosted.mul(0.4))
+      .add(boarded.mul(0.6))
+      .min(1);
     glass.metalnessNode = float(0);
 
     const weathered = new Map<THREE.Material, THREE.Material>();

@@ -14,6 +14,8 @@ export interface Hud {
   setMessage(text: string | null): void;
   /** 0 hip … 1 aimed: the crosshair fades out as the optic takes over. */
   setAim(factor: number): void;
+  /** New round: clear transient markers (hitmarker, damage arc). */
+  reset(): void;
   /** Crosshair gap (px from centre to each tick) = the weapon's current spread cone on screen. */
   setSpread(gapPx: number): void;
   update(dt: number): void;
@@ -139,6 +141,11 @@ export function createHud(): Hud {
       } else {
         message.style.opacity = '0';
       }
+    },
+    reset() {
+      hitTimer = dmgTimer = 0;
+      hitmark.style.opacity = '0';
+      dmgDir.style.opacity = '0';
     },
     setSpread(px) {
       const g = Math.round(Math.max(5, Math.min(140, px)));

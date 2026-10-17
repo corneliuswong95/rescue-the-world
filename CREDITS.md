@@ -10,7 +10,8 @@ noted) — content unchanged otherwise.
 
 | Asset | Type | Source | License | Notes |
 |---|---|---|---|---|
-| kloofendal_38d_partly_cloudy_puresky (2k) | HDRI | polyhaven.com/a/kloofendal_38d_partly_cloudy_puresky | CC0 | Sky, IBL and sun direction. `public/assets/hdri/` |
+| qwantani_late_afternoon_puresky (2k) | HDRI | polyhaven.com/a/qwantani_late_afternoon_puresky | CC0 | Sky, IBL and sun direction (late-afternoon key). `public/assets/hdri/` |
+| Foundry Yard light probe | Baked data | Generated in-engine from the assets above (`tools/assets/bake-probe.mjs`) | CC0 (derived) | `public/assets/hdri/foundry_yard_probe.bin` |
 | asphalt_02 (2k) | PBR texture | polyhaven.com/a/asphalt_02 | CC0 | Yard ground. `public/assets/textures/asphalt_02/` |
 | dirty_concrete (2k) | PBR texture | polyhaven.com/a/dirty_concrete | CC0 | Sidewalks. `public/assets/textures/dirty_concrete/` |
 | concrete_wall_008 (2k) | PBR texture | polyhaven.com/a/concrete_wall_008 | CC0 | Docks, ramps, curbs. `public/assets/textures/concrete_wall_008/` |

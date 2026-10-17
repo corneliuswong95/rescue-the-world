@@ -10,7 +10,7 @@
 import * as THREE from 'three/webgpu';
 import { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js';
 
-const HDRI_URL = '/assets/hdri/kloofendal_38d_partly_cloudy_puresky_2k.hdr';
+const HDRI_URL = '/assets/hdri/qwantani_late_afternoon_puresky_2k.hdr';
 
 /** Luminance above this multiple of the bright-sky percentile counts as "sun". */
 const SUN_THRESHOLD = 6;

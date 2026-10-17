@@ -331,6 +331,12 @@ const loop = createFixedLoop(STEP_HZ, {
     weapon.consumeAimKick(_aimKick); // the non-recovering share of recoil moves real aim
     player.addAim(_aimKick.pitch, _aimKick.yaw);
     weapon.moveSpread01 = Math.min(1, player.speed / 5.2); // full move-penalty at walk speed
+    // Sprint ↔ aim rules: sprinting lowers the gun (no ADS/fire until it's back up); aiming
+    // blocks sprint and slows movement.
+    weapon.setSprinting(player.sprinting);
+    player.sprintAllowed = weapon.sprintAllowed;
+    player.speedScale = weapon.moveSpeedScale;
+    weapon.groundY = player.feetY;
     const wantFov = FOV - (FOV - ADS_FOV) * weapon.adsFactor + weapon.fovPunch;
     if (Math.abs(camera.fov - wantFov) > 0.05) {
       camera.fov = wantFov;

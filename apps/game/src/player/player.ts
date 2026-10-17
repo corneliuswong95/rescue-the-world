@@ -226,6 +226,11 @@ export class Player {
   /** Camera forward (bound, so AI can call it detached): bots outside it shoot worse. */
   readonly viewDir = (out: THREE.Vector3): THREE.Vector3 => this.camera.getWorldDirection(out);
 
+  /** World height of the soles (brass bounces, ground effects). */
+  get feetY(): number {
+    return this.pos.y - (this.curCyl + RADIUS);
+  }
+
   /** True while actually sprinting (weapon lowers, can't fire until it comes back up). */
   get sprinting(): boolean {
     return this.isSprinting;

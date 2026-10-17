@@ -18,8 +18,9 @@
  *
  * Proportions target a 1.80 m adult in kit: head ≈ 0.24 m (1/7.5), hip pivot ≈ 0.93 m,
  * shoulders ≈ 0.47 m across the deltoids with armour. Authored in model space (feet at y = 0,
- * forward -Z, right +X); the upper body is bladed ~13° toward the gun side, as a real shooter
- * stands, so the support hand can reach the handguard. Geometry is cached per look.
+ * forward -Z, right +X); the upper body is bladed ~18° toward the gun side, as a real shooter
+ * stands, so the support arm reaches the handguard with the elbow bent and tucked. Geometry is cached per look and lives
+ * for the session (bots are pooled, never rebuilt).
  */
 import * as THREE from 'three/webgpu';
 import {
@@ -78,14 +79,36 @@ export const PIVOT: readonly THREE.Vector3[] = [
 /** Parent segment of each segment (-1 = attached to the model root). */
 export const PARENT: readonly number[] = [-1, 0, 1, 0, 3, 4, 0, 6, 7, 1];
 
-/** Rifle placement in model space (ready carry): bore along local -Z, pistol grip near origin. */
-const RIFLE_EULER = new THREE.Euler(-0.2, 0.035, 0.02);
-const RIFLE_BUTT_LOCAL = V(0, -0.02, 0.287); // upper butt pad, in the shoulder pocket
-const RIFLE_BUTT_AT = V(0.112, 1.372, -0.14);
-export const RIFLE_QUAT = new THREE.Quaternion().setFromEuler(RIFLE_EULER);
-export const RIFLE_POS = RIFLE_BUTT_AT.clone().sub(RIFLE_BUTT_LOCAL.clone().applyQuaternion(RIFLE_QUAT));
-const RIFLE_M = new THREE.Matrix4().compose(RIFLE_POS, RIFLE_QUAT, V(1, 1, 1));
+/**
+ * Shouldered-aim layer, shared by the authoring below and the animation: the arms segment is
+ * raised `armRX` about the shoulder line and lifted (`armY`, `armZ`), the chest leans `chestRX`.
+ */
+export const AIM = { armRX: 0.36, armY: 0.05, armZ: 0.0, chestRX: -0.08 } as const;
+
+const RIFLE_BUTT_LOCAL = V(0, -0.02, 0.287); // upper butt pad
 const MUZZLE_LOCAL = V(0, 0, -0.528);
+
+/** Rifle pose in model space (ready carry) for a kit; bore along local -Z, grip near origin. */
+export interface RiflePlacement {
+  pos: THREE.Vector3;
+  quat: THREE.Quaternion;
+}
+
+/**
+ * Authored where it matters — shouldered: butt in the shoulder pocket against the armour (plate
+ * front for carriers, shirt for the chest rig), bore level once the chest leans in. The ready
+ * carry is that pose rotated back down about the shoulder line, so the aim layer restores it.
+ */
+function riflePlacement(kit: Kit): RiflePlacement {
+  const buttZ = kit === 'heavy' ? -0.155 : kit === 'rusher' ? -0.09 : -0.13;
+  const butt = V(0.128, 1.475, buttZ);
+  const qAim = new THREE.Quaternion().setFromEuler(new THREE.Euler(-AIM.chestRX, 0.04, 0.012));
+  const aimPos = butt.sub(RIFLE_BUTT_LOCAL.clone().applyQuaternion(qAim));
+  const pivot = PIVOT[SEG.arms];
+  const down = new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), -AIM.armRX);
+  const pos = aimPos.sub(V(0, AIM.armY, AIM.armZ)).sub(pivot).applyQuaternion(down).add(pivot);
+  return { pos, quat: down.multiply(qAim) };
+}
 /** The neck was reading long: the whole head assembly sits this much lower on the neck pivot. */
 const HEAD_DROP = 0.032;
 
@@ -100,10 +123,11 @@ export interface Probe {
 export interface RigDef {
   geos: THREE.BufferGeometry[];
   probes: Probe[];
+  rifle: RiflePlacement;
 }
 
 // --- Surfaces ---------------------------------------------------------------------------
-const S_CAMO: Surface = { rough: 0.9, metal: 0, camo: 1, pattern: PAT.fabric };
+const S_CAMO_BASE: Surface = { rough: 0.9, metal: 0, camo: 1, pattern: PAT.fabric };
 const S_FABRIC: Surface = { rough: 0.88, metal: 0, camo: 0, pattern: PAT.fabric };
 const S_CORDURA: Surface = { rough: 0.8, metal: 0, camo: 0, pattern: PAT.cordura };
 const S_POLY: Surface = { rough: 0.5, metal: 0.04, camo: 0, pattern: PAT.plain };
@@ -113,17 +137,21 @@ const S_KNIT: Surface = { rough: 0.96, metal: 0, camo: 0, pattern: PAT.knit };
 const S_GLOVE: Surface = { rough: 0.68, metal: 0, camo: 0, pattern: PAT.leather };
 const S_BOOT: Surface = { rough: 0.62, metal: 0, camo: 0, pattern: PAT.leather };
 const S_SOLE: Surface = { rough: 0.9, metal: 0, camo: 0, pattern: PAT.rubber };
-// Mirrored amber lens: catches the sky so the eye line reads at 10 m+.
-const S_LENS: Surface = { rough: 0.07, metal: 0.85, camo: 0, pattern: PAT.gloss };
-const S_VISOR: Surface = { rough: 0.05, metal: 0.45, camo: 0, pattern: PAT.gloss };
+// Smoked lens: half-mirrored so it picks up the environment probe; neutral, not a coloured glint.
+const S_LENS: Surface = { rough: 0.07, metal: 0.4, camo: 0, pattern: PAT.gloss };
+const S_SKIN: Surface = { rough: 0.5, metal: 0, camo: 0, pattern: PAT.plain };
+const S_VISOR: Surface = { rough: 0.06, metal: 0.28, camo: 0, pattern: PAT.gloss };
 
 const GEAR = 0x1c1d1e; // black nylon / polymer
 const MAG = 0x26241f;
 const GLOVE = 0x40372d;
 const BOOT = 0x463a2e;
 const SOLE = 0x1a1918;
-const KNIT = 0x23241f;
-const LENS = 0xa8732e;
+const LENS = 0x30343a;
+/** Knit balaclava per kit — dark olive / coyote / charcoal-olive, never black (albedo ≈ 0.08–0.1). */
+const KNIT: Record<Kit, number> = { rifleman: 0x55574a, rusher: 0x5f5446, heavy: 0x494c48 };
+/** The strip of skin left between balaclava and goggles. */
+const SKIN: Record<Kit, number> = { rifleman: 0xa08a7a, rusher: 0x7d6352, heavy: 0x9a8070 };
 const VISOR = 0x1a1d20;
 const DUST = 0x8c7d64;
 const TAN = 0x8a7c60;
@@ -208,7 +236,13 @@ function build(t: Look): RigDef {
   const vestLite = mixHex(vest, TAN, 0.18);
   const vestWarm = mixHex(vest, TAN, 0.08); // pouches vary slightly in dye lot
   const vestDark = mixHex(vest, GEAR, 0.3);
-  const gaiter = mixHex(mixHex(uni, 0x2a2924, 0.55), GEAR, 0.25); // dark knit, reads as fabric
+  const knit = KNIT[kit];
+  const gaiter = mixHex(knit, uni, 0.3); // a separate knit layer, a touch different in tone
+  const shells = mixHex(t.helmet, TAN, 0.35); // headset cups match the helmet, not black
+  const frame = mixHex(mixHex(t.helmet, TAN, 0.3), GEAR, 0.35); // goggle frame, distinct from the knit
+  const S_CAMO: Surface = { ...S_CAMO_BASE, camo: rusher ? 2 : 1 }; // rusher print at half size
+  const rifle = riflePlacement(kit);
+  const RIFLE_M = new THREE.Matrix4().compose(rifle.pos, rifle.quat, V(1, 1, 1));
 
   // ========================================================================= LEGS
   for (const side of [-1, 1] as const) {
@@ -221,7 +255,10 @@ function build(t: Look): RigDef {
     const thighSecs: Section[] = [
       { y: 0.47, rx: 0.063, rz: 0.064, x: sx(0.099), z: -0.012 },
       { y: 0.52, rx: 0.067, rz: 0.069, x: sx(0.099), z: -0.012, rip: 0.06, ripK: 6 },
-      { y: 0.585, rx: 0.073, rz: 0.077, x: sx(0.099), z: -0.01, rip: 0.07, ripK: 5, ripP: 1.3 },
+      { y: 0.538, rx: 0.071, rz: 0.074, x: sx(0.099), z: -0.012, rip: 0.08, ripK: 5, ripP: 0.6 },
+      { y: 0.556, rx: 0.067, rz: 0.07, x: sx(0.099), z: -0.011 },
+      { y: 0.574, rx: 0.075, rz: 0.079, x: sx(0.099), z: -0.01, rip: 0.07, ripK: 6, ripP: 1.9 },
+      { y: 0.6, rx: 0.073, rz: 0.077, x: sx(0.099), z: -0.01, rip: 0.05, ripK: 5, ripP: 1.3 },
       { y: 0.66, rx: 0.08, rz: 0.084, x: sx(0.099), z: -0.007, rip: 0.04, ripK: 7 },
       { y: 0.75, rx: 0.087, rz: 0.091, x: sx(0.099), z: -0.004, front: 1.04, rip: 0.02, ripK: 4 },
       { y: 0.84, rx: 0.092, rz: 0.096, x: sx(0.098), z: 0 },
@@ -241,7 +278,9 @@ function build(t: Look): RigDef {
       { y: 0.29, rx: 0.057, rz: 0.062, x: sx(0.101), z: 0.013, rip: 0.05, ripK: 5 },
       { y: 0.345, rx: 0.059, rz: 0.066, x: sx(0.1), z: 0.014, back: 1.08 },
       { y: 0.4, rx: 0.062, rz: 0.068, x: sx(0.099), z: 0.008, back: 1.05, rip: 0.03, ripK: 6 },
-      { y: 0.47, rx: 0.064, rz: 0.066, x: sx(0.098), z: -0.004, rip: 0.05, ripK: 5 },
+      { y: 0.445, rx: 0.066, rz: 0.069, x: sx(0.098), z: 0.002, rip: 0.07, ripK: 5, ripP: 2.4 },
+      { y: 0.462, rx: 0.062, rz: 0.064, x: sx(0.098), z: -0.002 },
+      { y: 0.48, rx: 0.067, rz: 0.068, x: sx(0.098), z: -0.006, rip: 0.06, ripK: 6, ripP: 0.9 },
       { y: 0.545, rx: 0.066, rz: 0.068, x: sx(0.098), z: -0.012 },
     ];
     shin.add(loft(shinSecs, 14), null, uni, S_CAMO, 0.6);
@@ -267,39 +306,50 @@ function build(t: Look): RigDef {
     // Boot: the padded shaft rides with the shin (ankle flex happens below it); the leather
     // upper is lofted heel→toe on the foot, over a lugged rubber sole + midsole.
     const shaft: Section[] = [
-      { y: 0.05, rx: 0.051, rz: 0.064, x: sx(0.102), z: 0.022 },
-      { y: 0.12, rx: 0.054, rz: 0.062, x: sx(0.102), z: 0.02 },
-      { y: 0.2, rx: 0.057, rz: 0.062, x: sx(0.102), z: 0.018 },
-      { y: 0.232, rx: 0.061, rz: 0.066, x: sx(0.102), z: 0.018 },
-      { y: 0.248, rx: 0.055, rz: 0.059, x: sx(0.102), z: 0.018 },
+      { y: 0.05, rx: 0.046, rz: 0.06, x: sx(0.102), z: 0.022 },
+      { y: 0.12, rx: 0.05, rz: 0.059, x: sx(0.102), z: 0.02 },
+      { y: 0.2, rx: 0.054, rz: 0.06, x: sx(0.102), z: 0.018 },
+      { y: 0.232, rx: 0.058, rz: 0.064, x: sx(0.102), z: 0.018 },
+      { y: 0.248, rx: 0.053, rz: 0.057, x: sx(0.102), z: 0.018 },
     ];
-    shin.add(loft(shaft, 12), null, BOOT, S_BOOT, 0.14);
+    shin.add(loft(shaft, 12), null, BOOT, S_BOOT, 0.07);
     // Foot body lofted along +Y, then rotated so +Y → -Z (forward); section z → height.
+    // Sections run heel → toe (loft +Y becomes model -Z); section rz/z are height + centre.
     const footSecs: Section[] = [
-      { y: -0.088, rx: 0.032, rz: 0.032, z: 0.062, n: 2.4 },
-      { y: -0.075, rx: 0.043, rz: 0.052, z: 0.07, n: 2.4 },
-      { y: -0.03, rx: 0.048, rz: 0.06, z: 0.076, n: 2.4 },
-      { y: 0.03, rx: 0.05, rz: 0.055, z: 0.071, n: 2.5 },
-      { y: 0.085, rx: 0.052, rz: 0.043, z: 0.061, n: 2.6 },
-      { y: 0.135, rx: 0.051, rz: 0.034, z: 0.051, n: 2.6 },
-      { y: 0.178, rx: 0.046, rz: 0.029, z: 0.046, n: 2.5 },
-      { y: 0.202, rx: 0.038, rz: 0.023, z: 0.043, n: 2.3 },
-      { y: 0.214, rx: 0.024, rz: 0.014, z: 0.043, n: 2.2 },
+      { y: -0.088, rx: 0.028, rz: 0.032, z: 0.062, n: 2.4 },
+      { y: -0.075, rx: 0.037, rz: 0.052, z: 0.07, n: 2.4 },
+      { y: -0.03, rx: 0.041, rz: 0.06, z: 0.076, n: 2.4 },
+      { y: 0.03, rx: 0.043, rz: 0.055, z: 0.071, n: 2.5 },
+      { y: 0.085, rx: 0.044, rz: 0.043, z: 0.061, n: 2.5 },
+      { y: 0.135, rx: 0.043, rz: 0.035, z: 0.052, n: 2.4 },
+      { y: 0.175, rx: 0.038, rz: 0.03, z: 0.048, n: 2.2 },
+      { y: 0.2, rx: 0.029, rz: 0.024, z: 0.046, n: 2.1 },
+      { y: 0.213, rx: 0.016, rz: 0.015, z: 0.046, n: 2 },
     ];
-    foot.add(loft(footSecs, 12), trs(sx(0.102), 0, 0.02, -Math.PI / 2), BOOT, S_BOOT, 0.14);
-    foot.add(rbox(0.104, 0.024, 0.31, 0.009, 1), trs(sx(0.102), 0.014, -0.05), SOLE, S_SOLE);
-    foot.add(rbox(0.1, 0.014, 0.298, 0.005, 1), trs(sx(0.102), 0.03, -0.05), mixHex(SOLE, BOOT, 0.3), S_SOLE);
-    foot.add(rbox(0.094, 0.016, 0.08, 0.006, 1), trs(sx(0.102), 0.008, 0.058), SOLE, S_SOLE);
+    foot.add(loft(footSecs, 12), trs(sx(0.102), 0, 0.02, -Math.PI / 2), BOOT, S_BOOT, 0.07);
+    // One-piece lugged sole: bevelled edges, thicker heel, rounded toe with a little spring.
+    const soleSecs: Section[] = [
+      { y: -0.094, rx: 0.026, rz: 0.01, z: 0.015, n: 3.2 },
+      { y: -0.086, rx: 0.036, rz: 0.016, z: 0.016, n: 3.6 },
+      { y: -0.03, rx: 0.039, rz: 0.016, z: 0.016, n: 3.6 },
+      { y: 0.0, rx: 0.037, rz: 0.012, z: 0.017, n: 3.6 },
+      { y: 0.06, rx: 0.044, rz: 0.012, z: 0.014, n: 3.6 },
+      { y: 0.13, rx: 0.046, rz: 0.012, z: 0.014, n: 3.6 },
+      { y: 0.18, rx: 0.041, rz: 0.011, z: 0.018, n: 3.2 },
+      { y: 0.207, rx: 0.03, rz: 0.009, z: 0.023, n: 2.8 },
+      { y: 0.22, rx: 0.014, rz: 0.006, z: 0.026, n: 2.4 },
+    ];
+    foot.add(loft(soleSecs, 14), trs(sx(0.102), 0, 0.02, -Math.PI / 2), SOLE, S_SOLE);
     // Stiffened heel counter + lace panel down the instep.
-    foot.add(curveZ(rbox(0.09, 0.048, 0.028, 0.01, 1), -3), trs(sx(0.102), 0.062, 0.1, 0.12), mixHex(BOOT, GEAR, 0.2), S_BOOT);
-    foot.add(rbox(0.036, 0.01, 0.1, 0.004, 1), trs(sx(0.102), 0.112, -0.05, -0.4), mixHex(BOOT, GEAR, 0.45), S_FABRIC);
+    foot.add(curveZ(rbox(0.076, 0.046, 0.026, 0.01, 1), -3.4), trs(sx(0.102), 0.062, 0.098, 0.12), mixHex(BOOT, GEAR, 0.2), S_BOOT);
+    foot.add(rbox(0.03, 0.01, 0.1, 0.004, 1), trs(sx(0.102), 0.112, -0.05, -0.4), mixHex(BOOT, GEAR, 0.45), S_FABRIC);
 
     // Probes: sole heel/toe/sides, toe cap, knee, calf, cargo pocket.
     const fs = side < 0 ? SEG.footL : SEG.footR;
-    probe(fs, V(sx(0.102), 0, 0.105), true);
-    probe(fs, V(sx(0.102), 0, -0.205), true);
-    probe(fs, V(sx(0.16), 0.004, -0.12), true);
-    probe(fs, V(sx(0.045), 0.004, -0.12), true);
+    probe(fs, V(sx(0.102), 0.002, 0.108), true);
+    probe(fs, V(sx(0.102), 0.006, -0.19), true);
+    probe(fs, V(sx(0.148), 0.003, -0.11), true);
+    probe(fs, V(sx(0.056), 0.003, -0.11), true);
     probe(fs, V(sx(0.102), 0.06, -0.21));
     const ss = side < 0 ? SEG.shinL : SEG.shinR;
     probe(ss, V(sx(0.102), 0.22, 0.085));
@@ -373,7 +423,7 @@ function build(t: Look): RigDef {
   const W = PIVOT[SEG.chest];
   const blade = new THREE.Matrix4()
     .makeTranslation(W.x, W.y, W.z)
-    .multiply(new THREE.Matrix4().makeRotationY(-0.22))
+    .multiply(new THREE.Matrix4().makeRotationY(-0.32))
     .multiply(new THREE.Matrix4().makeTranslation(-W.x, -W.y, -W.z));
   const B = (m: THREE.Matrix4 | null): THREE.Matrix4 => (m ? blade.clone().multiply(m) : blade.clone());
   const bp = (x: number, y: number, z: number): THREE.Vector3 => V(x, y, z).applyMatrix4(blade);
@@ -562,11 +612,12 @@ function build(t: Look): RigDef {
   const arms = sinks[SEG.arms];
   const toModel = (x: number, y: number, z: number): THREE.Vector3 => V(x, y, z).applyMatrix4(RIFLE_M);
   const shoulderR = bp(0.178, 1.432, 0.0);
-  const shoulderL = bp(-0.178, 1.428, -0.032);
+  const shoulderL = bp(-0.178, 1.428, -0.07); // support shoulder rolled forward
   const wristR = toModel(0.042, -0.074, 0.13);
-  const wristL = toModel(-0.044, -0.064, -0.19);
-  const elbowR = solveElbow(shoulderR, wristR, 0.31, 0.27, V(0.55, -0.8, 0.25));
-  const elbowL = solveElbow(shoulderL, wristL, 0.31, 0.27, V(-0.7, -0.7, 0.1));
+  const wristL = toModel(-0.04, -0.07, -0.125);
+  const elbowR = solveElbow(shoulderR, wristR, 0.31, 0.27, V(0.6, -0.75, 0.25));
+  // Support elbow drops down and in, under the gun (not winged out with a straight arm).
+  const elbowL = solveElbow(shoulderL, wristL, 0.31, 0.27, V(0.35, -1, 0.05));
   for (const [s, e, w, side] of [
     [shoulderR, elbowR, wristR, 1],
     [shoulderL, elbowL, wristL, -1],
@@ -578,8 +629,10 @@ function build(t: Look): RigDef {
         [0.08, 0.064, 0.062],
         [0.28, 0.062, 0.059, 0, 0.03],
         [0.52, 0.057, 0.054, 0, 0.07],
-        [0.76, 0.053, 0.05, 0, 0.09],
-        [0.92, 0.05, 0.048, 0, 0.06],
+        [0.72, 0.054, 0.051, 0, 0.09],
+        [0.8, 0.056, 0.053, 0, 0.1],
+        [0.86, 0.051, 0.048],
+        [0.92, 0.054, 0.051, 0, 0.08],
         [1, 0.044, 0.044],
       ], 12),
       alongMatrix(s, e),
@@ -592,7 +645,9 @@ function build(t: Look): RigDef {
     arms.add(
       limb(foreLen, [
         [0, 0.048, 0.048],
-        [0.18, 0.055, 0.051, 0, 0.08],
+        [0.08, 0.053, 0.05, 0, 0.1],
+        [0.13, 0.049, 0.046],
+        [0.2, 0.055, 0.051, 0, 0.08],
         [0.42, 0.051, 0.047, 0, 0.09],
         [0.72, 0.044, 0.04, 0, 0.07],
         [0.8, 0.047, 0.044, 0, 0.1],
@@ -660,13 +715,13 @@ function build(t: Look): RigDef {
   }
   // Left (support) hand under the handguard: palm cupped beneath, fingers up the far side,
   // thumb forward along the near side (C-clamp).
-  arms.add(rbox(0.07, 0.028, 0.084, 0.012, 1), RM(trs(-0.01, -0.042, -0.245, 0, 0, 0.35)), GLOVE, S_GLOVE);
+  arms.add(rbox(0.07, 0.028, 0.084, 0.012, 1), RM(trs(-0.01, -0.042, -0.18, 0, 0, 0.35)), GLOVE, S_GLOVE);
   for (let i = 0; i < 4; i++) {
-    const z = -0.278 + i * 0.019;
+    const z = -0.213 + i * 0.019;
     arms.add(fingerSweep([V(0.008, -0.044, z), V(0.027, -0.033, z), V(0.031, -0.012, z), V(0.027, 0.006, z)], 0.0093), RIFLE_M, GLOVE, S_GLOVE);
   }
   {
-    const [g, m] = capsuleAB(V(-0.032, -0.028, -0.205), V(-0.03, 0.008, -0.288), 0.0102);
+    const [g, m] = capsuleAB(V(-0.032, -0.028, -0.14), V(-0.03, 0.008, -0.223), 0.0102);
     arms.add(g, RM(m), GLOVE, S_GLOVE);
   }
 
@@ -674,7 +729,7 @@ function build(t: Look): RigDef {
   probe(SEG.arms, bp(-0.24, 1.43, -0.03));
   probe(SEG.arms, elbowR.clone().add(V(0.04, -0.03, 0)));
   probe(SEG.arms, elbowL.clone().add(V(-0.04, -0.03, 0)));
-  probe(SEG.arms, toModel(0, -0.06, -0.25));
+  probe(SEG.arms, toModel(0, -0.06, -0.19));
   probe(SEG.arms, toModel(0.03, -0.1, 0.07));
   probe(SEG.arms, MUZZLE_LOCAL.clone().applyMatrix4(RIFLE_M));
   probe(SEG.arms, toModel(0, -0.16, -0.1));
@@ -693,7 +748,7 @@ function build(t: Look): RigDef {
       10,
     ),
     null,
-    KNIT,
+    knit,
     S_KNIT,
   );
   // Neck gaiter pulled up over nose and mouth to the eyewear; drops lower at the nape.
@@ -705,8 +760,8 @@ function build(t: Look): RigDef {
         { y: 1.535, rx: 0.083, rz: 0.086, z: -0.01, rip: 0.11, ripK: 6, ripP: 1 },
         { y: 1.568, rx: 0.077, rz: 0.088, z: -0.018, front: 1.08, rip: 0.07, ripK: 7, ripP: 2.2 },
         { y: 1.6, rx: 0.071, rz: 0.092, z: -0.022, front: 1.12, rip: 0.04, ripK: 5 },
-        { y: 1.632, rx: 0.08, rz: 0.1, z: -0.018, front: 1.08, rip: 0.03, ripK: 6, ripP: 0.7 },
-        { y: 1.658, rx: 0.083, rz: 0.1, z: -0.015, front: 1.03 },
+        { y: 1.622, rx: 0.08, rz: 0.1, z: -0.018, front: 1.08, rip: 0.03, ripK: 6, ripP: 0.7 },
+        { y: 1.64, rx: 0.082, rz: 0.1, z: -0.016, front: 1.04 },
       ],
       18,
       false,
@@ -741,7 +796,7 @@ function build(t: Look): RigDef {
       p.setXYZ(i, X, Y, Z);
     }
     g.computeVertexNormals();
-    head.add(g, trs(0, 1.665, -0.014), KNIT, S_KNIT);
+    head.add(g, trs(0, 1.665, -0.014), knit, S_KNIT);
   }
   const arc = (ax: number, az: number, y: number, a0: number, a1: number, n: number, cz = -0.014): THREE.Vector3[] => {
     const pts: THREE.Vector3[] = [];
@@ -756,10 +811,12 @@ function build(t: Look): RigDef {
     head.add(sweep(arc(0.104, 0.122, 1.635, -1.32, 1.32, 8), 0.08, 0.004, V(0, 1, 0), 12, 6), null, VISOR, S_VISOR);
     head.add(sweep(arc(0.106, 0.124, 1.713, -1.32, 1.32, 8), 0.007, 0.006, V(0, 1, 0), 12, 4), null, GEAR, S_POLY);
   } else {
-    // Ballistic goggles: wide wrap frame, mirrored amber lens, strap round the back.
-    head.add(sweep(arc(0.086, 0.101, 1.678, -1.38, 1.38, 8), 0.029, 0.012, V(0, 1, 0), 12, 8), null, GEAR, S_POLY);
+    // Skin round the eyes (the balaclava's eye opening), then ballistic goggles: a visible
+    // polymer frame, a smoked half-mirror lens, strap round the back.
+    head.add(sweep(arc(0.083, 0.099, 1.674, -1.2, 1.2, 6), 0.046, 0.006, V(0, 1, 0), 10, 6), null, SKIN[kit], S_SKIN);
+    head.add(sweep(arc(0.086, 0.101, 1.678, -1.38, 1.38, 8), 0.029, 0.012, V(0, 1, 0), 12, 8), null, frame, S_POLY);
     head.add(sweep(arc(0.088, 0.109, 1.679, -1.12, 1.12, 6), 0.022, 0.004, V(0, 1, 0), 10, 6), null, LENS, S_LENS);
-    head.add(sweep(arc(0.088, 0.104, 1.685, 1.3, Math.PI * 2 - 1.3, 8), 0.012, 0.003, V(0, 1, 0), 8, 4), null, GEAR, S_FABRIC);
+    head.add(sweep(arc(0.088, 0.104, 1.685, 1.3, Math.PI * 2 - 1.3, 8), 0.012, 0.003, V(0, 1, 0), 8, 4), null, mixHex(frame, GEAR, 0.5), S_FABRIC);
   }
 
   // Helmet: high-cut shell with brow, ear cut-outs and a deeper nape.
@@ -809,7 +866,7 @@ function build(t: Look): RigDef {
       ],
       14,
     );
-    head.add(cup, trs(s * 0.083, 1.655, 0.006, 0, 0, -s * Math.PI * 0.5), GEAR, S_POLY);
+    head.add(cup, trs(s * 0.083, 1.655, 0.006, 0, 0, -s * Math.PI * 0.5), shells, S_POLY);
     head.add(rbox(0.012, 0.045, 0.022, 0.004, 1), trs(s * 0.118, 1.705, 0.008, 0, 0, s * 0.18), GEAR, S_POLY);
   }
   // Chin strap.
@@ -835,7 +892,7 @@ function build(t: Look): RigDef {
   probe(SEG.head, V(0.11, 1.75 + hy, 0.08));
   probe(SEG.head, V(-0.11, 1.75 + hy, 0.08));
 
-  return { geos: sinks.map((s, i) => s.build(PIVOT[i])), probes };
+  return { geos: sinks.map((s, i) => s.build(PIVOT[i])), probes, rifle };
 }
 
 const cache = new Map<string, RigDef>();

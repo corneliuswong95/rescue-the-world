@@ -57,6 +57,6 @@ export function applyHaze(scene: THREE.Scene, sky: SkyLight): void {
   const heightFalloff = exp(max(positionWorld.y, 0).mul(-0.07));
   const density = float(1).sub(exp(dist.mul(-0.003))).mul(heightFalloff);
   const scatter = pow(max(dot(view.normalize(), sunDir), 0), 14);
-  const haze = mix(vec3(0.5, 0.58, 0.68), sunTint.mul(1.2), scatter);
+  const haze = mix(vec3(0.5, 0.58, 0.68), sunTint.mul(0.8), scatter);
   scene.fogNode = fog(haze, density);
 }

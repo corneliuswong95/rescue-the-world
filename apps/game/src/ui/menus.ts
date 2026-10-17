@@ -19,7 +19,9 @@ export interface Menus {
 }
 
 const ACCENT = '#e8a33d';
-const PANEL = 'background:rgba(12,14,18,.55);border-left:2px solid rgba(232,163,61,.7);border-radius:2px';
+const PANEL =
+  'background:linear-gradient(90deg,rgba(12,14,18,.62),rgba(12,14,18,.35) 70%,rgba(12,14,18,0));' +
+  'border-left:2px solid rgba(232,163,61,.7);border-radius:2px';
 
 export function createMenus(initial: Settings): Menus {
   const settings: Settings = { ...initial };
@@ -66,7 +68,7 @@ export function createMenus(initial: Settings): Menus {
   // Main menu
   const menu = panel();
   menu.appendChild(title('OPERATOR'));
-  menu.appendChild(tagline('BROWSER TACTICAL FPS'));
+  menu.appendChild(tagline('FOUNDRY YARD · CLEAR THE COMPOUND'));
   menu.appendChild(button('DEPLOY', () => api.onStart(), true));
   menu.appendChild(button('SETTINGS', () => openSettings('menu')));
   menu.appendChild(
@@ -167,7 +169,7 @@ export function createMenus(initial: Settings): Menus {
     return t;
   }
   function hint(text: string): HTMLElement {
-    const t = div('color:#8a93a0;font-size:11px;margin-top:18px;max-width:440px;line-height:1.6');
+    const t = div('color:#aeb6c1;font-size:13px;margin-top:18px;max-width:440px;line-height:1.6;letter-spacing:.6px');
     t.textContent = text;
     return t;
   }

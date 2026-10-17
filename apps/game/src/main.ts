@@ -15,7 +15,7 @@ import { createPost } from './engine/post';
 import { initPhysics, createPhysicsWorld } from './physics/world';
 import { Input } from './input/input';
 import { Player } from './player/player';
-import { buildLevel, loadLevelAssets } from './level/compound';
+import { STACK_TOP, buildLevel, loadLevelAssets } from './level/compound';
 import { loadLevelMaterials } from './level/materials';
 import { DecalPool } from './weapons/decals';
 import { RaycastWeapon } from './weapons/weapon';
@@ -68,6 +68,9 @@ applyHaze(scene, sky);
 // --- World + navmesh ---
 const level = buildLevel(scene, physics.world, levelMats, levelAssets);
 const nav = new Navigation(level.navMeshes);
+// Rapier only refreshes its query structures on step(): do it now so spawn ground-raycasts (and
+// anything else that queries before the first step) see the level.
+physics.world.updateSceneQueries();
 
 // --- Player + weapon + combat services ---
 const input = new Input(renderer.domElement);
@@ -76,7 +79,7 @@ const player = new Player(physics.world, input, camera, spawn);
 
 const registry = new HitRegistry();
 const decals = new DecalPool(scene);
-const playerTracers = new Tracers(scene, 32, 0xffe08a, 2.2); // own fire: subtle
+const playerTracers = new Tracers(scene, 32, 0xffe08a, 3, 3); // own fire: every 3rd round
 const enemyTracers = new Tracers(scene, 48, 0xff7a3c, 5); // incoming fire: reads clearly
 const particles = new ParticleFx(scene);
 const hud = createHud();
@@ -128,6 +131,8 @@ function spawnEnemies(): void {
     enemies.spawn(pos, scaleArchetype(arch, d));
     totalEnemies += 1;
   }
+  // New bot capsules must be queryable immediately (QA states shoot before the first step).
+  physics.world.updateSceneQueries();
 }
 
 player.onDamaged = (rel) => hud.damageFrom(rel);
@@ -159,6 +164,12 @@ function startGame(): void {
   spawnEnemies();
   player.respawn(spawn);
   weapon.resetPose();
+  // Fresh round: no leftover tracers, puffs or bullet holes from the last one.
+  playerTracers.clear();
+  enemyTracers.clear();
+  particles.clear();
+  particles.warmPlume(STACK_TOP, 10);
+  decals.clear();
   missionTime = 0;
   qaFreeze = false;
   qaAim = false;
@@ -219,9 +230,9 @@ function applyQuality(q: Quality): void {
     sun.setShadowQuality(null);
     usePost = false;
   } else {
-    // TRAA + sharpen resolve sub-pixel detail, so 1.25× is the high-tier ceiling: a retina panel
-    // at 2× would ~2.5× the fill cost (measured 20–35 fps on an M1) for little visible gain.
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, q === 'high' ? 1.25 : 1));
+    // CSS-pixel resolution on every tier: TRAA + sharpen resolve sub-pixel detail, and a retina
+    // panel at 1.25–2× measured 20–36 fps on an M1 (vs ~60 at 1×) for little visible gain.
+    renderer.setPixelRatio(1);
     sun.setShadowQuality(q === 'high' ? 4096 : 2048);
     post.setQuality(q);
     usePost = true;
@@ -258,17 +269,23 @@ async function prewarm(): Promise<void> {
     player.setPose(0, 0.9, 0, (i * Math.PI) / 2, 0);
     player.updateCamera(1, 0, 0);
     await renderer.compileAsync(scene, camera);
-    if (usePost) post.render();
-    else renderer.render(scene, camera);
+    renderer.render(scene, camera); // low tier (no post)
+    for (const tier of ['medium', 'high'] as const) {
+      post.setQuality(tier); // both post graphs, so switching tiers never hitches either
+      post.render();
+    }
   }
+  applyQuality(settings.quality);
   for (const o of unhidden) o.visible = false;
   weapon.setVisible(false);
   enemies.clear();
   player.respawn(spawn);
 }
 await prewarm();
+particles.warmPlume(STACK_TOP, 10);
 menus.showMenu();
 const _aimKick = { pitch: 0, yaw: 0 };
+let plumeTimer = 0;
 
 // Main-menu backdrop: a slow, eased dolly across the yard toward the smokestack.
 let menuT = 0;
@@ -327,9 +344,15 @@ const loop = createFixedLoop(STEP_HZ, {
     else player.updateCamera(alpha, weapon.recoil.pitch, weapon.recoil.yaw, weapon.recoil.roll);
     enemies.render(alpha, fx);
 
+    // Smokestack plume: steady puffs while the world runs (menu included).
+    plumeTimer -= gameState === 'menu' ? dt : fx;
+    if (plumeTimer <= 0) {
+      plumeTimer = 0.35;
+      particles.plume(STACK_TOP);
+    }
     playerTracers.update(fx);
     enemyTracers.update(fx);
-    particles.update(fx);
+    particles.update(gameState === 'menu' ? dt : fx);
     hud.update(fx);
 
     camera.getWorldDirection(_fwd);
@@ -341,6 +364,10 @@ const loop = createFixedLoop(STEP_HZ, {
 
     hud.setVisible(playing);
     hud.setAim(weapon.adsFactor);
+    hud.setSpread(
+      (window.innerHeight / 2) * (Math.tan(THREE.MathUtils.degToRad(weapon.spreadDeg) / 2) /
+        Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)),
+    );
     weapon.setVisible(playing);
     hud.setHealth(player.health, 100);
     hud.setObjective(`ELIMINATE HOSTILES — ${enemies.aliveCount()} / ${totalEnemies}`);

@@ -22,16 +22,31 @@ function canvasTexture(w: number, h: number, draw: (ctx: CanvasRenderingContext2
   return t;
 }
 
-/** Hot core + 6 tapered petals. */
-function starTexture(): THREE.CanvasTexture {
-  return canvasTexture(128, 128, (ctx) => {
-    const s = 64;
-    ctx.translate(s, s);
-    ctx.globalCompositeOperation = 'lighter';
-    for (let i = 0; i < 6; i++) {
+const STAR_VARIANTS = 3;
+
+/** Atlas of STAR_VARIANTS stars side by side: hot core + 4–5 uneven tapered petals each. */
+function starAtlas(): THREE.CanvasTexture {
+  return canvasTexture(128 * STAR_VARIANTS, 128, (ctx) => {
+    for (let v = 0; v < STAR_VARIANTS; v++) {
       ctx.save();
-      ctx.rotate((i / 6) * Math.PI * 2 + (i % 2) * 0.18);
-      const len = i % 2 ? 46 : 60;
+      drawStar(ctx, v + 1, 128 * v + 64);
+      ctx.restore();
+    }
+  });
+}
+
+function drawStar(ctx: CanvasRenderingContext2D, seed: number, cx: number): void {
+  let r = seed * 9301 + 49297;
+  const rnd = (): number => ((r = (r * 9301 + 49297) % 233280) / 233280);
+  const petals = 4 + (seed % 2);
+  {
+    const s = 64;
+    ctx.translate(cx, s);
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < petals; i++) {
+      ctx.save();
+      ctx.rotate((i / petals) * Math.PI * 2 + (rnd() - 0.5) * 0.9);
+      const len = 30 + rnd() * 32;
       const g = ctx.createLinearGradient(0, 0, len, 0);
       g.addColorStop(0, 'rgba(255,236,190,0.95)');
       g.addColorStop(0.45, 'rgba(255,170,70,0.55)');
@@ -50,7 +65,7 @@ function starTexture(): THREE.CanvasTexture {
     core.addColorStop(1, 'rgba(255,140,40,0)');
     ctx.fillStyle = core;
     ctx.fillRect(-s, -s, 2 * s, 2 * s);
-  });
+  }
 }
 
 /** Side-on flame cone: bright at the muzzle (left), ragged tongues toward the tip (right). */
@@ -73,7 +88,7 @@ function flameTexture(): THREE.CanvasTexture {
   });
 }
 
-let shared: { star: THREE.Material; flame: THREE.Material; starGeo: THREE.PlaneGeometry; flameGeo: THREE.PlaneGeometry } | null = null;
+let shared: { star: THREE.Material; flame: THREE.Material; starGeos: THREE.PlaneGeometry[]; flameGeo: THREE.PlaneGeometry } | null = null;
 
 function sharedResources(): NonNullable<typeof shared> {
   if (shared) return shared;
@@ -92,7 +107,15 @@ function sharedResources(): NonNullable<typeof shared> {
   const flameGeo = new THREE.PlaneGeometry(1, 0.5);
   flameGeo.translate(0.5, 0, 0); // base at the muzzle, extends along +x
   flameGeo.rotateY(Math.PI / 2); // +x → -z (down the barrel)
-  shared = { star: mat(starTexture(), 3.2), flame: mat(flameTexture(), 2.6), starGeo: new THREE.PlaneGeometry(1, 1), flameGeo };
+  // One material for every star; each variant is a plane whose UVs select its atlas cell, so
+  // switching variants never compiles a new pipeline mid-fight.
+  const starGeos = Array.from({ length: STAR_VARIANTS }, (_, v) => {
+    const g = new THREE.PlaneGeometry(1, 1);
+    const uvs = g.getAttribute('uv') as THREE.BufferAttribute;
+    for (let i = 0; i < uvs.count; i++) uvs.setX(i, (v + uvs.getX(i)) / STAR_VARIANTS);
+    return g;
+  });
+  shared = { star: mat(starAtlas(), 3.2), flame: mat(flameTexture(), 2.6), starGeos, flameGeo };
   return shared;
 }
 
@@ -100,12 +123,14 @@ export class MuzzleFlash {
   readonly root = new THREE.Group();
   private readonly star: THREE.Mesh;
   private readonly sides: THREE.Mesh[] = [];
+  private readonly variants: THREE.PlaneGeometry[];
   private timer = 0;
 
   /** @param size approximate star diameter in metres (enemies exaggerate for readability). */
   constructor(private readonly size: number) {
     const r = sharedResources();
-    this.star = new THREE.Mesh(r.starGeo, r.star);
+    this.variants = r.starGeos;
+    this.star = new THREE.Mesh(r.starGeos[0], r.star);
     this.root.add(this.star);
     for (let i = 0; i < 2; i++) {
       const side = new THREE.Mesh(r.flameGeo, r.flame);
@@ -123,9 +148,15 @@ export class MuzzleFlash {
   /** @param scale extra size multiplier (e.g. smaller through an optic so it can't white it out) */
   fire(duration = 0.045, scale = 1): void {
     const s = this.size * scale * (0.8 + Math.random() * 0.45);
-    this.star.scale.setScalar(s);
+    // Real flashes vary frame to frame: pick a petal variant, and ~40% of shots are core-only.
+    const coreOnly = Math.random() < 0.4;
+    this.star.geometry = this.variants[(Math.random() * this.variants.length) | 0];
+    this.star.scale.setScalar(coreOnly ? s * 0.6 : s);
     this.star.rotation.z = Math.random() * Math.PI * 2;
-    for (const side of this.sides) side.scale.set(s, s * (0.7 + Math.random() * 0.5), s * (1.1 + Math.random() * 0.8));
+    for (const side of this.sides) {
+      side.visible = !coreOnly;
+      side.scale.set(s, s * (0.7 + Math.random() * 0.5), s * (1.1 + Math.random() * 0.8));
+    }
     this.root.rotation.z = Math.random() * Math.PI;
     this.root.visible = true;
     this.timer = duration;

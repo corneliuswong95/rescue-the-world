@@ -1,10 +1,13 @@
 /**
  * Pooled hitscan tracers drawn as travelling streaks: a short, HDR-bright bolt that flies from
  * the muzzle to the impact at a visible (slowed) speed — reads like real tracer fire instead of
- * an instant full-length laser line. Shared by the player weapon and enemy fire.
- * Ring-buffer pool, no per-shot or per-frame allocation.
+ * an instant full-length laser line. Each streak is two crossed soft-edged ribbons whose
+ * brightness tapers from a hot head to a transparent tail, so it reads from any angle.
+ * Shared by the player weapon and enemy fire. Ring-buffer pool, no per-shot/per-frame allocation.
  */
 import * as THREE from 'three/webgpu';
+import { float, uv, vec3 } from 'three/tsl';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 const SPEED = 380; // m/s — well below real muzzle velocity so the eye can track it
 const STREAK = 3.2; // m
@@ -20,19 +23,36 @@ interface Tracer {
 export class Tracers {
   private readonly items: Tracer[] = [];
   private cursor = 0;
+  private shots = 0;
 
   private static readonly _up = new THREE.Vector3(0, 1, 0);
 
-  constructor(scene: THREE.Scene, count = 32, color: THREE.ColorRepresentation = 0xffd27a, hdr = 5) {
-    const geo = new THREE.CylinderGeometry(0.009, 0.009, 1, 5, 1, true);
-    geo.translate(0, 0.5, 0); // origin at the tail → scale.y is the visible length
-    const mat = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(color).multiplyScalar(hdr),
+  /**
+   * @param every draw a tracer for one shot in `every` (real belts/mags load every 3rd–5th round)
+   */
+  constructor(
+    scene: THREE.Scene,
+    count = 32,
+    color: THREE.ColorRepresentation = 0xffd27a,
+    hdr = 5,
+    private readonly every = 1,
+  ) {
+    // Two crossed ribbons, origin at the tail → scale.y is the visible length.
+    const a = new THREE.PlaneGeometry(0.03, 1).translate(0, 0.5, 0);
+    const b = a.clone().rotateY(Math.PI / 2);
+    const geo = mergeGeometries([a, b]);
+    a.dispose();
+    b.dispose();
+    const c = new THREE.Color(color);
+    const mat = new THREE.MeshBasicNodeMaterial({
       transparent: true,
-      opacity: 0.85,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
+      side: THREE.DoubleSide,
     });
+    const along = uv().y; // 0 tail → 1 head
+    const across = float(1).sub(uv().x.sub(0.5).abs().mul(2)); // soft ribbon edges
+    mat.colorNode = vec3(c.r, c.g, c.b).mul(hdr).mul(along.pow(1.6)).mul(across.pow(1.5));
     for (let i = 0; i < count; i++) {
       const m = new THREE.Mesh(geo, mat);
       m.visible = false;
@@ -44,6 +64,7 @@ export class Tracers {
   }
 
   spawn(from: THREE.Vector3, to: THREE.Vector3): void {
+    if (this.shots++ % this.every !== 0) return;
     const it = this.items[this.cursor];
     this.cursor = (this.cursor + 1) % this.items.length;
     it.dir.subVectors(to, from);
@@ -54,6 +75,13 @@ export class Tracers {
     it.head = 0;
     it.mesh.quaternion.setFromUnitVectors(Tracers._up, it.dir);
     this.place(it);
+  }
+
+  clear(): void {
+    for (const it of this.items) {
+      it.head = -1;
+      it.mesh.visible = false;
+    }
   }
 
   update(dt: number): void {

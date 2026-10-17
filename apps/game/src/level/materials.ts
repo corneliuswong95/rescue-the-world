@@ -19,6 +19,7 @@ import {
   positionWorld,
   smoothstep,
   texture,
+  uv,
   vec2,
   vec3,
 } from 'three/tsl';
@@ -77,13 +78,24 @@ export async function loadLevelMaterials(): Promise<LevelMaterials> {
     loadSet('concrete_wall_008'),
   ]);
 
-  // Asphalt: damp patches — darker albedo, lower roughness, flattened normal.
+  // Asphalt. Anti-tiling: a second sample at 0.47× scale (same orientation, so the normal map's
+  // tangent frame stays valid) blended in by low-frequency noise breaks the 3.2 m crack grid.
+  // Damp patches darken/smooth; their deepest cores become standing puddles that mirror the
+  // local probe (the buildings).
   const asphalt = surface(asphaltTex, new THREE.Color(1, 1, 1));
-  const damp = smoothstep(0.18, 0.42, mx_fractal_noise_float(positionWorld.xz.mul(0.075), 4, 2.0, 0.55));
-  const aArm = texture(asphaltTex.arm);
-  asphalt.colorNode = texture(asphaltTex.color).rgb.mul(macro(0.06, 0.16)).mul(mix(float(1), float(0.62), damp));
-  asphalt.roughnessNode = mix(aArm.g, float(0.34), damp);
-  asphalt.normalNode = normalMap(texture(asphaltTex.normal), vec2(mix(float(1), float(0.35), damp)));
+  const uvB = uv().mul(0.47).add(vec2(0.31, 0.77));
+  const swap = smoothstep(-0.25, 0.25, mx_fractal_noise_float(positionWorld.xz.mul(0.045), 2, 2.0, 0.5));
+  const sampleBoth = (tex: THREE.Texture) => mix(texture(tex), texture(tex, uvB), swap);
+  const wet = mx_fractal_noise_float(positionWorld.xz.mul(0.075), 4, 2.0, 0.55);
+  const damp = smoothstep(0.18, 0.42, wet);
+  const puddle = smoothstep(0.46, 0.52, wet);
+  const aArm = sampleBoth(asphaltTex.arm);
+  asphalt.colorNode = sampleBoth(asphaltTex.color)
+    .rgb.mul(macro(0.06, 0.16))
+    .mul(mix(float(1), float(0.62), damp))
+    .mul(mix(float(1), float(0.7), puddle));
+  asphalt.roughnessNode = mix(mix(aArm.g, float(0.34), damp), float(0.035), puddle);
+  asphalt.normalNode = normalMap(sampleBoth(asphaltTex.normal), vec2(mix(float(1), float(0.35), damp).mul(float(1).sub(puddle))));
 
   const sidewalk = surface(sidewalkTex, new THREE.Color(0.92, 0.9, 0.86));
 

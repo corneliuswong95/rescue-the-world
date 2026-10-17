@@ -15,6 +15,7 @@ import type { LevelMaterials } from './materials';
 import { StaticGeometry } from './geometry';
 import { LevelColliders } from './colliders';
 import { FacadeKit, type BrickMaps } from './facade';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { float, mx_fractal_noise_float, normalMap, positionWorld, smoothstep, step, texture, uv, vec2, vec3 } from 'three/tsl';
 import { PropSet, loadGlb } from './props';
 
@@ -39,6 +40,14 @@ export const PROP_NAMES = [
   'metal_jerrycan_green',
   'modular_fire_escape',
 ] as const;
+
+/**
+ * Top of the foundry smokestack (the plume emitter sits here). 26 m tall, set back behind the
+ * north block so its crown and plume sit inside a level gaze from most of the yard.
+ */
+export const STACK_TOP = new THREE.Vector3(-9, 26.2, -34);
+/** Vertical scale from the 31 m authoring profile below to the placed stack. */
+const STACK_K = STACK_TOP.y / 31.3;
 
 /** Half-extent of the yard to the building wall planes. */
 const WALL = 19.75;
@@ -170,14 +179,15 @@ export function buildLevel(
   ramp(geo, col, mat.concrete, [-17, 0, -2], Math.PI, 3, DOCK_H, 4); // W dock, rising north
   ramp(geo, col, mat.concrete, [10.5, 0, 3.4], Math.PI / 2, 3, DOCK_H, 4); // E dock, rising east
 
-  // --- Central cover: an L of jersey barriers + a crate stack. ---
+  // --- Central cover: an L of checker-painted (low) and jersey barriers + a crate stack. ---
   const jit = (i: number): number => Math.sin(i * 12.9898) * 0.035; // deterministic tiny misalignment
-  [-6.2, -4.6, -3.0, -1.4].forEach((z, i) => props.place('concrete_road_barrier_02', { x: 1 + jit(i) * 2, z, yaw: Math.PI / 2 + jit(i + 7) }));
+  [-6.2, -4.6, -3.0, -1.4].forEach((z, i) => props.place('concrete_road_barrier', { x: 1 + jit(i) * 2, z, yaw: Math.PI / 2 + jit(i + 7) }));
   [2.6, 4.2, 5.8].forEach((x, i) => props.place('concrete_road_barrier_02', { x, z: -7.5 + jit(i + 3) * 2, yaw: jit(i + 11) }));
   crateStack(props, -1.2, -5.6, 0.15);
 
-  // --- Long low cover near the player spawn: checker-painted road barriers. ---
-  [0.8, 2.4, 4.0, 5.6, 7.2].forEach((x, i) => props.place('concrete_road_barrier', { x, z: 10 + jit(i + 5) * 3, yaw: jit(i + 17) }));
+  // --- Spawn cover: 1.11 m jersey barriers — taller than crouched eye height (0.95 m), so
+  // crouching behind them actually hides you; standing, you can fire over them. ---
+  [0.8, 2.4, 4.0, 5.6, 7.2].forEach((x, i) => props.place('concrete_road_barrier_02', { x, z: 10 + jit(i + 5) * 3, yaw: jit(i + 17) }));
 
   // --- Scattered cover. ---
   crateStack(props, -5.6, -3.0, -0.2);
@@ -211,12 +221,12 @@ export function buildLevel(
   props.place('barrel_03', { x: 2.5, y: sy, z: WALL - 0.45 });
   props.place('barrel_01', { x: 3.2, y: sy, z: WALL - 0.42 });
   props.place('old_tyre', { x: -13.5, y: sy + 0.3, z: WALL - 0.2, yaw: 0.15, collide: false });
-  props.place('modular_fire_escape', { x: -12, y: sy + 3.65, z: -WALL + 0.78, collide: false });
+  props.place('modular_fire_escape', { x: -12, y: sy + 2.65, z: -WALL + 0.78, collide: false }); // top rail under the cornice
 
   // AC condensers on the sidewalk against the walls (the scan's base sits 0.32 m below its
   // origin); security lights over doors (no colliders — above head height).
   const acY = sy + 0.32;
-  for (const x of [-15.5, 2.2, 12.6]) props.place('exterior_aircon_unit', { x, y: acY, z: -WALL + 0.24 });
+  for (const x of [-15.5, 5.2, 12.6]) props.place('exterior_aircon_unit', { x, y: acY, z: -WALL + 0.24 });
   props.place('exterior_aircon_unit', { x: WALL - 0.24, y: acY, z: -6, yaw: -Math.PI / 2 });
   props.place('exterior_aircon_unit', { x: 8, y: acY, z: WALL - 0.24, yaw: Math.PI });
   for (const x of [-18.1, 1.7]) props.place('security_light', { x, y: 3.1, z: -WALL + 0.03, collide: false });
@@ -238,7 +248,7 @@ export function buildLevel(
   hatch(root, mat, -14, -11.4, -13.4, -6.6);
 
   // Landmark: a foundry smokestack rising behind the north block.
-  smokestack(root, kit.brickMaps(), -9, -27.5);
+  smokestack(root, kit.brickMaps(), mat.steel, STACK_TOP.x, STACK_TOP.z);
 
   // Manhole covers in the asphalt.
   props.place('water_manhole_cover', { x: 3.4, y: 0.012, z: 2.8, collide: false });
@@ -332,14 +342,53 @@ function hatch(parent: THREE.Object3D, mat: LevelMaterials, x0: number, x1: numb
   parent.add(plane);
 }
 
-/** Tapered brick chimney with a corbelled, soot-blackened crown (outside the playable yard). */
-function smokestack(parent: THREE.Object3D, maps: BrickMaps, x: number, z: number): void {
+/** Smokestack radius at height y (matches the lathe profile below). */
+const stackRadius = (y: number): number => {
+  const a = y / STACK_K; // back to authoring height
+  return a < 8 ? 1.75 - (0.15 * a) / 8 : 1.6 - (0.28 * (a - 8)) / 21.6;
+};
+
+/**
+ * Tapered brick chimney with a corbelled, soot-blackened crown (outside the playable yard),
+ * plus iron hoop bands, a service ladder and a lightning rod (one merged steel mesh).
+ */
+function smokestack(parent: THREE.Object3D, maps: BrickMaps, steel: THREE.Material, x: number, z: number): void {
+  const parts: THREE.BufferGeometry[] = [];
+  for (const y of [12, 17, 22, 27].map((h) => h * STACK_K)) {
+    parts.push(new THREE.TorusGeometry(stackRadius(y) + 0.03, 0.04, 6, 48).rotateX(Math.PI / 2).translate(0, y, 0));
+  }
+  const rail = (sx: number): THREE.BufferGeometry => {
+    const top = 29.4 * STACK_K;
+    const a = new THREE.Vector3(sx, 1.4, stackRadius(1.4) + 0.14);
+    const b = new THREE.Vector3(sx, top, stackRadius(top) + 0.14);
+    const len = a.distanceTo(b);
+    const g = new THREE.CylinderGeometry(0.02, 0.02, len, 6);
+    g.rotateX(Math.asin((b.z - a.z) / len)); // lean with the taper: +y axis → (0, dy, dz)
+    return g.translate((a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2);
+  };
+  parts.push(rail(-0.22), rail(0.22));
+  for (let y = 1.6; y < 29.4 * STACK_K; y += 0.36) {
+    parts.push(new THREE.BoxGeometry(0.44, 0.025, 0.025).translate(0, y, stackRadius(y) + 0.14));
+  }
+  parts.push(new THREE.CylinderGeometry(0.012, 0.012, 2.6, 5).translate(stackRadius(29.6 * STACK_K) - 0.1, STACK_TOP.y + 1.0, 0));
+  const merged = mergeGeometries(parts.map((g) => (g.index ? g.toNonIndexed() : g)).map((g) => {
+    g.deleteAttribute('uv');
+    return g;
+  }));
+  if (merged) {
+    const iron = new THREE.Mesh(merged, steel);
+    iron.position.set(x, 0, z);
+    iron.rotation.y = Math.atan2(-x, -z); // local +z (ladder side) → toward the yard centre
+    iron.castShadow = true;
+    parent.add(iron);
+  }
+
   // prettier-ignore
   const profile = [[1.75, 0], [1.6, 8], [1.32, 29.6], [1.5, 29.9], [1.5, 31.1], [1.18, 31.1], [1.12, 30.4]]
-    .map(([r, y]) => new THREE.Vector2(r, y));
+    .map(([r, y]) => new THREE.Vector2(r, y * STACK_K));
   const g = new THREE.LatheGeometry(profile, 40);
   const uvs = g.getAttribute('uv') as THREE.BufferAttribute;
-  for (let i = 0; i < uvs.count; i++) uvs.setXY(i, uvs.getX(i) * 3.2, uvs.getY(i) * 10.4); // ≈3 m brick tiles
+  for (let i = 0; i < uvs.count; i++) uvs.setXY(i, uvs.getX(i) * 3.2, uvs.getY(i) * 10.4 * STACK_K); // ≈3 m brick tiles
   const tile = (t: THREE.Texture | null): THREE.Texture | null => {
     if (!t) return null;
     const c = t.clone();
@@ -351,7 +400,7 @@ function smokestack(parent: THREE.Object3D, maps: BrickMaps, x: number, z: numbe
   const map = tile(maps.map);
   const nrm = tile(maps.normalMap);
   const rough = tile(maps.roughnessMap);
-  const soot = smoothstep(22, 30.5, positionWorld.y).mul(0.75);
+  const soot = smoothstep(STACK_TOP.y * 0.72, STACK_TOP.y, positionWorld.y).mul(0.75);
   const streaks = mx_fractal_noise_float(vec2(positionWorld.x.add(positionWorld.z).mul(3), positionWorld.y.mul(0.15)), 3, 2.0, 0.5);
   const base = map ? texture(map).rgb : vec3(0.35, 0.18, 0.12);
   m.colorNode = base.mul(float(1).sub(soot.mul(streaks.mul(0.3).add(0.85)))).mul(0.92);

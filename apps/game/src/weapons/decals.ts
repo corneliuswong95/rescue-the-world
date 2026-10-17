@@ -80,6 +80,12 @@ export class DecalPool {
     }
   }
 
+  /** Hide every decal (new round). */
+  clear(): void {
+    for (const m of this.meshes) m.visible = false;
+    this.cursor = 0;
+  }
+
   /** Place the next decal at a world hit point, oriented to the surface normal. */
   spawn(point: THREE.Vector3, normal: THREE.Vector3): void {
     const m = this.meshes[this.cursor];
@@ -91,7 +97,8 @@ export class DecalPool {
     // Nudge slightly off the surface along the normal, plus a tiny random spin for variety.
     m.position.copy(point).addScaledVector(this.n, 0.012);
     m.rotateZ(Math.random() * Math.PI * 2);
-    m.scale.setScalar(0.75 + Math.random() * 0.5);
+    // Floor strikes read larger (shallow-angle gouge in asphalt/concrete).
+    m.scale.setScalar((0.75 + Math.random() * 0.5) * (this.n.y > 0.7 ? 1.6 : 1));
     m.visible = true;
   }
 }

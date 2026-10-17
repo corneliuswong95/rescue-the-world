@@ -14,6 +14,8 @@ export interface Hud {
   setMessage(text: string | null): void;
   /** 0 hip … 1 aimed: the crosshair fades out as the optic takes over. */
   setAim(factor: number): void;
+  /** Crosshair gap (px from centre to each tick) = the weapon's current spread cone on screen. */
+  setSpread(gapPx: number): void;
   update(dt: number): void;
 }
 
@@ -26,13 +28,16 @@ export function createHud(): Hud {
   document.body.appendChild(hudRoot);
 
   // Crosshair
-  const crosshair = el('div', `position:fixed;left:50%;top:50%;width:16px;height:16px;
-    transform:translate(-50%,-50%);pointer-events:none;z-index:9`);
+  // Four ticks around a centre dot; their distance from centre (--gap) tracks weapon spread.
+  const crosshair = el('div', `position:fixed;left:50%;top:50%;width:0;height:0;
+    pointer-events:none;z-index:9;--gap:8px`);
+  const tick = (dx: number, dy: number, w: number, h: number): string =>
+    `<div style="position:absolute;width:${w}px;height:${h}px;background:#fff;box-shadow:0 0 2px #000;
+      transform:translate(-50%,-50%) translate(calc(var(--gap) * ${dx}), calc(var(--gap) * ${dy}))"></div>`;
   crosshair.innerHTML = `
-    <div style="position:absolute;left:50%;top:50%;width:2px;height:2px;background:#fff;
-      border-radius:50%;transform:translate(-50%,-50%);box-shadow:0 0 2px #000"></div>
-    ${line('50%', '0', '2px', '5px')}${line('50%', '11px', '2px', '5px')}
-    ${line('0', '50%', '5px', '2px')}${line('11px', '50%', '5px', '2px')}`;
+    <div style="position:absolute;width:2px;height:2px;background:#fff;border-radius:50%;
+      transform:translate(-50%,-50%);box-shadow:0 0 2px #000"></div>
+    ${tick(0, -1, 2, 6)}${tick(0, 1, 2, 6)}${tick(-1, 0, 6, 2)}${tick(1, 0, 6, 2)}`;
   hudRoot.appendChild(crosshair);
 
   // Hitmarker (X of 4 lines), hidden until a hit
@@ -81,7 +86,7 @@ export function createHud(): Hud {
   hudRoot.appendChild(vignette);
 
   // Damage direction: a wide red arc near the screen edge, rotated toward the shooter.
-  const dmgDir = el('div', `position:fixed;left:50%;top:50%;width:62vmin;height:62vmin;z-index:9;
+  const dmgDir = el('div', `position:fixed;left:50%;top:50%;width:84vmin;height:84vmin;z-index:9;
     transform:translate(-50%,-50%);pointer-events:none;opacity:0`);
   dmgDir.innerHTML = `<div style="position:absolute;inset:0;border-radius:50%;
     border:10px solid transparent;border-top-color:rgba(220,30,20,.85);
@@ -89,6 +94,7 @@ export function createHud(): Hud {
   hudRoot.appendChild(dmgDir);
   let dmgTimer = 0;
   let aimStep = -1; // last written crosshair opacity step (avoid per-frame style writes)
+  let gapPx = -1;
   let lastHp = -1;
 
   return {
@@ -121,7 +127,7 @@ export function createHud(): Hud {
     damageFrom(relAngleRad) {
       dmgDir.style.transform = `translate(-50%,-50%) rotate(${relAngleRad}rad)`;
       dmgDir.style.opacity = '1';
-      dmgTimer = 0.9;
+      dmgTimer = 0.55;
     },
     setObjective(text) {
       objective.textContent = text;
@@ -133,6 +139,12 @@ export function createHud(): Hud {
       } else {
         message.style.opacity = '0';
       }
+    },
+    setSpread(px) {
+      const g = Math.round(Math.max(5, Math.min(140, px)));
+      if (g === gapPx) return;
+      gapPx = g;
+      crosshair.style.setProperty('--gap', `${g}px`);
     },
     setAim(factor) {
       const step = Math.round(Math.max(0, 1 - factor * 1.6) * 10);
@@ -147,7 +159,7 @@ export function createHud(): Hud {
       }
       if (dmgTimer > 0) {
         dmgTimer -= dt;
-        dmgDir.style.opacity = `${Math.max(0, dmgTimer / 0.9)}`;
+        dmgDir.style.opacity = `${Math.max(0, dmgTimer / 0.55)}`;
       }
     },
   };
@@ -157,10 +169,6 @@ function el(tag: string, css: string): HTMLDivElement {
   const d = document.createElement(tag) as HTMLDivElement;
   d.style.cssText = css;
   return d;
-}
-function line(left: string, top: string, w: string, h: string): string {
-  return `<div style="position:absolute;left:${left};top:${top};width:${w};height:${h};
-    background:#fff;transform:translate(-50%,-50%);box-shadow:0 0 2px #000"></div>`;
 }
 function mark(color: string): string {
   const seg = (s: string): string =>

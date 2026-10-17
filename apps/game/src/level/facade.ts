@@ -106,7 +106,7 @@ export class FacadeKit {
   private weather(kitScene: THREE.Object3D): void {
     const glass = new THREE.MeshStandardNodeMaterial();
     const pane = hash(instanceIndex); // one value per window instance
-    const dead = smoothstep(0.93, 0.95, pane); // ~6% grimed-over / boarded-dark panes
+    const dead = smoothstep(0.89, 0.91, pane); // ~10% grimed-over / boarded-dark panes
     const lowInFloor = float(1).sub(positionWorld.y.sub(0.15).div(3).fract()); // dirt pools at the sill
     glass.colorNode = mix(vec3(0.03, 0.036, 0.04).mul(pane.mul(0.6).add(0.7)), vec3(0.05, 0.045, 0.04), dead);
     glass.roughnessNode = mix(float(0.05), float(0.45), pane).add(lowInFloor.mul(0.12)).add(dead.mul(0.5)).min(1);
@@ -243,10 +243,10 @@ function weatheredWall(src: THREE.MeshStandardMaterial): THREE.MeshStandardNodeM
   const base = src.map ? texture(src.map).rgb : vec3(1);
   const along = positionWorld.x.add(positionWorld.z); // runs along any of the four walls
   const streak = mx_fractal_noise_float(vec2(along.mul(5.5), positionWorld.y.mul(0.22)), 3, 2.0, 0.5);
-  const splash = float(1).sub(smoothstep(0.15, 0.95, positionWorld.y)).mul(0.38);
-  const soot = smoothstep(8.2, 9.4, positionWorld.y).mul(0.3);
+  const splash = float(1).sub(smoothstep(0.15, 1.05, positionWorld.y)).mul(0.45);
+  const soot = smoothstep(7.9, 9.4, positionWorld.y).mul(0.4);
   const drift = mx_fractal_noise_float(positionWorld.xz.mul(0.035), 2, 2.0, 0.5).mul(0.08).add(1);
-  const dirt = float(1).sub(splash).sub(soot).sub(streak.max(0).mul(0.16));
+  const dirt = float(1).sub(splash).sub(soot).sub(streak.max(0).mul(0.34));
   m.colorNode = base.mul(vec3(src.color.r, src.color.g, src.color.b)).mul(dirt).mul(drift);
   if (src.normalMap) m.normalNode = normalMap(texture(src.normalMap), vec2(src.normalScale.x, src.normalScale.y));
   m.roughnessNode = src.roughnessMap ? texture(src.roughnessMap).g.mul(src.roughness) : float(src.roughness);

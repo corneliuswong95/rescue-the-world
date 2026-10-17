@@ -139,6 +139,13 @@ class Pool {
     }
   }
 
+  clear(): void {
+    this.life.fill(0);
+    this.rgba.fill(0);
+    this.size.fill(0);
+    this.posAttr.needsUpdate = this.rgbaAttr.needsUpdate = this.sizeAttr.needsUpdate = true;
+  }
+
   update(dt: number): void {
     let alive = false;
     for (let i = 0; i < this.n; i++) {
@@ -177,6 +184,8 @@ const CHIP: Spawn = { speed: 3.2, spread: 1.4, life: 0.5, size0: 0.03, size1: 0.
 const DUST: Spawn = { speed: 0.9, spread: 1.1, life: 1.1, size0: 0.12, size1: 0.75, gravity: -0.15, drag: 2.2, alpha: 0.38 };
 const MIST: Spawn = { speed: 1.4, spread: 0.9, life: 0.38, size0: 0.08, size1: 0.42, gravity: 0.4, drag: 3.5, alpha: 0.75 };
 const DROPS: Spawn = { speed: 3.4, spread: 0.8, life: 0.45, size0: 0.022, size1: 0.018, gravity: 9.8, drag: 0.4, alpha: 0.95 };
+const KICK: Spawn = { speed: 2.2, spread: 0.7, life: 0.9, size0: 0.15, size1: 0.6, gravity: 2.5, drag: 1.8, alpha: 0.5 };
+const PLUME: Spawn = { speed: 0.7, spread: 0.35, life: 11, size0: 1.4, size1: 7.5, gravity: -0.12, drag: 0.08, alpha: 0.2 };
 const SMOKE: Spawn = { speed: 0.5, spread: 0.6, life: 0.9, size0: 0.05, size1: 0.32, gravity: -0.25, drag: 2.5, alpha: 0.18 };
 
 const SPARK_COL = new THREE.Color(1.0, 0.62, 0.25);
@@ -184,6 +193,7 @@ const DUST_COL = new THREE.Color(0.34, 0.32, 0.29); // unlit: keep it below lit-
 const CHIP_COL = new THREE.Color(0.26, 0.24, 0.22);
 const BLOOD_COL = new THREE.Color(0.28, 0.02, 0.02);
 const SMOKE_COL = new THREE.Color(0.62, 0.62, 0.6);
+const PLUME_COL = new THREE.Color(0.55, 0.55, 0.56);
 
 export class ParticleFx {
   private readonly hot: Pool;
@@ -202,6 +212,22 @@ export class ParticleFx {
     this.soft.emit(point, normal, 5, CHIP_COL, 1, CHIP);
     this._d.copy(normal).multiplyScalar(0.6).add(this._up).normalize();
     this.soft.emit(point, this._d, 7, DUST_COL, 1, DUST);
+    // Floor hits throw a visible dirt kick (otherwise strikes on dark asphalt vanish at range).
+    if (normal.y > 0.7) this.soft.emit(point, this._up, 5, DUST_COL, 1, KICK);
+  }
+
+  /** Pre-simulate `seconds` of plume (after clear()) so it's already streaming. */
+  warmPlume(top: THREE.Vector3, seconds: number): void {
+    for (let t = 0; t < seconds; t += 0.35) {
+      this.plume(top);
+      this.update(0.35);
+    }
+  }
+
+  /** One puff of the smokestack plume (call every ~0.35 s; drifts downwind and swells). */
+  plume(top: THREE.Vector3): void {
+    this._d.set(0.32, 1, 0.12).normalize();
+    this.soft.emit(top, this._d, 1, PLUME_COL, 1, PLUME);
   }
 
   /** Bullet into a body: dark-red mist spray along the shot + falling droplets. */
@@ -213,6 +239,11 @@ export class ParticleFx {
   /** Faint grey wisp at a muzzle after a shot. */
   muzzleSmoke(point: THREE.Vector3, forward: THREE.Vector3): void {
     this.soft.emit(point, forward, 2, SMOKE_COL, 1, SMOKE);
+  }
+
+  clear(): void {
+    this.hot.clear();
+    this.soft.clear();
   }
 
   update(dt: number): void {

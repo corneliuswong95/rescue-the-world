@@ -31,7 +31,7 @@ const BASE_URL = (() => {
 })();
 const LABEL = process.env.LABEL ?? 'adhoc';
 const OUT_DIR = path.resolve('shots', LABEL);
-const READY_TIMEOUT = 60_000;
+const READY_TIMEOUT = 120_000; // boot = asset load + probe bake + shader prewarm
 // Let the scene render enough frames after switching state for TRAA + temporal GTAO to
 // converge (headless WebGL renders only a few frames per second).
 const SETTLE_MS = Number(process.env.SETTLE_MS ?? 2500);

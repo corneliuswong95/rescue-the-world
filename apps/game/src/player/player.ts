@@ -218,6 +218,9 @@ export class Player {
   get health(): number {
     return this.hp;
   }
+  /** Camera forward (bound, so AI can call it detached): bots outside it shoot worse. */
+  readonly viewDir = (out: THREE.Vector3): THREE.Vector3 => this.camera.getWorldDirection(out);
+
   /** Grounded horizontal speed, m/s (weapon move-inaccuracy, HUD). */
   get speed(): number {
     return Math.hypot(this.vel.x, this.vel.z);
@@ -271,6 +274,12 @@ export class Player {
     this.yaw -= lookX * s;
     this.pitch -= lookY * s;
     this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch));
+  }
+
+  /** Permanently displace aim (recoil that doesn't recover): pitch + = up, yaw + = left. */
+  addAim(pitch: number, yaw: number): void {
+    this.yaw += yaw;
+    this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch + pitch));
   }
 
   /** Per-frame camera placement, interpolating between sim steps and adding recoil + bob. */

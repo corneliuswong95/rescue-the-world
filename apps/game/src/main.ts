@@ -268,6 +268,8 @@ async function prewarm(): Promise<void> {
 }
 await prewarm();
 menus.showMenu();
+const _aimKick = { pitch: 0, yaw: 0 };
+
 // Main-menu backdrop: a slow, eased dolly across the yard toward the smokestack.
 let menuT = 0;
 const _menuFrom = new THREE.Vector3(-13, 2.1, 15);
@@ -309,7 +311,10 @@ const loop = createFixedLoop(STEP_HZ, {
       active && input.isDown('KeyR'),
       (active && fi.aimHeld) || qaAim,
     );
-    const wantFov = FOV - (FOV - ADS_FOV) * weapon.adsFactor;
+    weapon.consumeAimKick(_aimKick); // the non-recovering share of recoil moves real aim
+    player.addAim(_aimKick.pitch, _aimKick.yaw);
+    weapon.moveSpread01 = Math.min(1, player.speed / 5.2); // full move-penalty at walk speed
+    const wantFov = FOV - (FOV - ADS_FOV) * weapon.adsFactor + weapon.fovPunch;
     if (Math.abs(camera.fov - wantFov) > 0.05) {
       camera.fov = wantFov;
       camera.updateProjectionMatrix();
@@ -319,7 +324,7 @@ const loop = createFixedLoop(STEP_HZ, {
       enemies.broadcastGunfire(_pos);
     }
     if (gameState === 'menu') menuFlythrough(dt);
-    else player.updateCamera(alpha, weapon.recoil.pitch, weapon.recoil.yaw);
+    else player.updateCamera(alpha, weapon.recoil.pitch, weapon.recoil.yaw, weapon.recoil.roll);
     enemies.render(alpha, fx);
 
     playerTracers.update(fx);

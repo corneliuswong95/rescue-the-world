@@ -98,7 +98,8 @@ export function createPost(
 
     const aoPass = ao(depth, normal, camera);
     aoPass.resolutionScale = 0.5;
-    aoPass.useTemporalFiltering = true; // TRAA resolves the per-frame noise
+    aoPass.useTemporalFiltering = true; // TRAA resolves the per-frame noise…
+    aoPass.samples.value = 8; // …so half the default taps converge to the same result
     aoPass.radius.value = 0.55;
     aoPass.thickness.value = 0.8;
     aoPass.distanceExponent.value = 1.4;

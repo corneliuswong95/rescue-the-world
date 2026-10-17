@@ -18,7 +18,7 @@
  */
 import * as THREE from 'three/webgpu';
 import { createRifle } from '../weapons/rifle';
-import { PARENT, PIVOT, RIFLE_POS, RIFLE_QUAT, SEG, SEG_COUNT, soldierRig, type Kit } from './soldierModel';
+import { AIM, PARENT, PIVOT, SEG, SEG_COUNT, soldierRig, type Kit } from './soldierModel';
 import { soldierMaterial } from './soldierMaterial';
 
 export type AnimState = 'idle' | 'run' | 'dead';
@@ -100,7 +100,6 @@ export class Soldier {
   private readonly model = new THREE.Group();
   private readonly seg: THREE.Group[] = [];
   private readonly probes: LiveProbe[] = [];
-  private readonly ownGeo: THREE.BufferGeometry[] = []; // per-instance (rifle); body is shared
 
   private readonly pose = new Float32Array(NCH);
   private readonly idleP = new Float32Array(NCH);
@@ -126,9 +125,9 @@ export class Soldier {
   // Hit reaction.
   private flinchT = 1;
   private flinchDir = 1;
-  private readonly seed = Math.random() * 10;
-  private readonly fallSide = Math.random() < 0.5 ? 1 : -1;
-  private readonly fallFwd = Math.random() * 2 - 1;
+  private seed = 0;
+  private fallSide = 1;
+  private fallFwd = 0;
 
   private readonly _wp = new THREE.Vector3();
   private readonly _prev = new THREE.Vector3();
@@ -160,20 +159,37 @@ export class Soldier {
 
     // Rifle in the hands (arms segment space), muzzle anchor at its tip.
     const rifle = createRifle();
-    rifle.group.position.copy(RIFLE_POS).sub(PIVOT[SEG.arms]);
-    rifle.group.quaternion.copy(RIFLE_QUAT);
+    rifle.group.position.copy(rig.rifle.pos).sub(PIVOT[SEG.arms]);
+    rifle.group.quaternion.copy(rig.rifle.quat);
     this.muzzleAnchor.position.copy(rifle.muzzle);
     rifle.group.add(this.muzzleAnchor);
-    rifle.group.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (m.isMesh) this.ownGeo.push(m.geometry);
-    });
     this.seg[SEG.arms].add(rifle.group);
 
-    this.model.position.y = GROUND;
     this.model.scale.setScalar(cfg.scale);
     this.root.add(this.model);
+    this.reset();
+  }
 
+  /** Back to a fresh, standing, alive soldier (pooled reuse across rounds — no rebuild). */
+  reset(): void {
+    this.state = 'idle';
+    this.time = 0;
+    this.phase = 0;
+    this.runW = 0;
+    this.deathT = 0;
+    this.settled = false;
+    this.vf = 0;
+    this.vr = 0;
+    this.hasPrev = false;
+    this.aimOn = false;
+    this.aimW = 0;
+    this.aimPitch = 0;
+    this.aimPitchGoal = 0;
+    this.flinchT = 1;
+    this.seed = Math.random() * 10;
+    this.fallSide = Math.random() < 0.5 ? 1 : -1;
+    this.fallFwd = Math.random() * 2 - 1;
+    this.model.position.set(0, GROUND, 0);
     this.idlePose(0, this.pose);
     this.apply(this.pose);
   }
@@ -351,15 +367,16 @@ export class Soldier {
     if (w <= 0) return;
     const p = this.aimPitch;
     const faceYaw = -o[C.hipRY]; // chest yaw that cancels the pelvis → shoulders on the facing
-    o[C.chRX] = lerp(o[C.chRX], -0.07 + p * 0.5, w);
+    o[C.chRX] = lerp(o[C.chRX], AIM.chestRX + p * 0.5, w);
     o[C.chRY] = lerp(o[C.chRY], faceYaw + 0.02, w);
     o[C.chRZ] = lerp(o[C.chRZ], 0, w);
-    o[C.aRX] = lerp(o[C.aRX], 0.32 + p * 0.5, w);
-    o[C.aY] = lerp(o[C.aY], 0.06, w);
-    o[C.aZ] = lerp(o[C.aZ], -0.02, w);
-    o[C.hdRX] = lerp(o[C.hdRX], -0.3 + p * 0.45, w);
-    o[C.hdRY] = lerp(o[C.hdRY], 0.1, w);
-    o[C.hdRZ] = lerp(o[C.hdRZ], -0.2, w);
+    o[C.aRX] = lerp(o[C.aRX], AIM.armRX + p * 0.5, w);
+    o[C.aY] = lerp(o[C.aY], AIM.armY, w);
+    o[C.aZ] = lerp(o[C.aZ], AIM.armZ, w);
+    // Head down and canted onto the stock (cheek weld), eye behind the optic.
+    o[C.hdRX] = lerp(o[C.hdRX], -0.4 + p * 0.45, w);
+    o[C.hdRY] = lerp(o[C.hdRY], 0.12, w);
+    o[C.hdRZ] = lerp(o[C.hdRZ], -0.24, w);
   }
 
   /** Hit flinch: fast knock-back that peaks at ~60 ms and is gone by ~250 ms. */
@@ -447,11 +464,5 @@ export class Soldier {
       if (v.y < minY) minY = v.y;
     }
     this.model.position.y = GROUND - minY + lift;
-  }
-
-  dispose(): void {
-    // Body geometry + the soldier material are shared (cached per look); only the rifle's
-    // geometry is per-instance. Rifle materials are shared by createRifle().
-    for (const g of this.ownGeo) g.dispose();
   }
 }

@@ -10,11 +10,15 @@
  *  - attack tokens: only a couple of bots fire aimed shots at once; the rest lay down slower
  *    suppressive fire — deliberate near misses that crack past the player — until one frees up;
  *  - a hit flinches them and pushes their next shot back.
+ *  - partial cover: if only the player's head/shoulders are exposed, spread doubles.
  * While engaging they shoulder the rifle at the player and strafe (navmesh-checked, direction
  * flips every 0.8–1.6 s) instead of standing still. Corpses stay until the round is cleared.
  *
+ * Bots are pooled: the mesh rig, rifle, collider, body and controller are built once and reused
+ * across rounds (`activate` / `deactivate`), so DEPLOY never rebuilds or recompiles anything.
+ *
  * Registers its collider in the HitRegistry so the player's weapon damages it; headshots use a
- * height threshold. The collider is removed on death so corpses never stop bullets.
+ * height threshold. The collider is disabled on death so corpses never stop bullets.
  */
 import * as THREE from 'three/webgpu';
 import { RAPIER } from '../physics/world';
@@ -67,6 +71,8 @@ const OFFSCREEN_COS = Math.cos((55 * Math.PI) / 180); // outside ~110° of the p
 const OFFSCREEN_MUL = 2.2;
 const FLINCH_DELAY = 0.25; // s added to the next shot when hit
 const NEAR_MISS = 2.5; // m: tracers that would end this close to the eye stop short
+const COVER_DROP = 0.55; // m below the player's eye for the partial-cover probe (upper torso)
+const COVER_MUL = 2; // spread multiplier when only head/shoulders are exposed
 const STRAFE_MIN = 0.8;
 const STRAFE_MAX = 1.6;
 const TOKEN_HOLD = 2.2; // s an aimed-fire token is held
@@ -97,7 +103,7 @@ export class Enemy implements Hittable {
   private readonly body: RAPIER_NS.RigidBody;
   private readonly collider: RAPIER_NS.Collider;
   private readonly controller: RAPIER_NS.KinematicCharacterController;
-  private physicsLive = true;
+  private physicsOn = false;
 
   private readonly pos = new THREE.Vector3();
   private readonly prevPos = new THREE.Vector3();
@@ -127,7 +133,8 @@ export class Enemy implements Hittable {
   private readonly muzzleFlash = new MuzzleFlash(0.5);
   private readonly character: Soldier;
   private animState: AnimState = 'idle';
-  private hp: number;
+  private hp = 0;
+  private arch: Archetype;
 
   // scratch (no per-tick allocations; the Ray aliases _eye/_toPlayer)
   private readonly _eye = new THREE.Vector3();
@@ -139,36 +146,28 @@ export class Enemy implements Hittable {
   private readonly _muzzle = new THREE.Vector3();
   private readonly _aim = new THREE.Vector3();
   private readonly _end = new THREE.Vector3();
+  private readonly _chest = new THREE.Vector3();
   private readonly _move = { x: 0, y: 0, z: 0 };
   private readonly ray: RAPIER_NS.Ray;
+  private readonly coverRay: RAPIER_NS.Ray; // eye → player's upper torso (aliases _eye/_chest)
 
+  /** Builds the bot once (inactive, hidden); `activate()` puts it into a round. */
   constructor(
     private readonly deps: EnemyDeps,
-    spawn: THREE.Vector3,
-    private readonly arch: Archetype,
+    arch: Archetype,
     private readonly tokens: AttackTokens,
   ) {
-    this.pos.copy(spawn);
-    this.prevPos.copy(spawn);
-    this.hp = arch.maxHp;
+    this.arch = arch;
     this.ray = new RAPIER.Ray(this._eye, this._toPlayer);
+    this.coverRay = new RAPIER.Ray(this._eye, this._chest);
 
     this.character = new Soldier(arch.soldier);
     this.group.add(this.character.root);
-    this.group.position.copy(spawn);
+    this.group.visible = false;
     deps.scene.add(this.group);
 
-    const bodyDesc = RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(
-      spawn.x,
-      spawn.y,
-      spawn.z,
-    );
-    this.body = deps.world.createRigidBody(bodyDesc);
-    this.collider = deps.world.createCollider(
-      RAPIER.ColliderDesc.capsule(CYL_HALF, RADIUS),
-      this.body,
-    );
-    deps.registry.register(this.collider.handle, this);
+    this.body = deps.world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setEnabled(false));
+    this.collider = deps.world.createCollider(RAPIER.ColliderDesc.capsule(CYL_HALF, RADIUS).setEnabled(false), this.body);
 
     this.controller = deps.world.createCharacterController(CONTROLLER_OFFSET);
     this.controller.setUp({ x: 0, y: 1, z: 0 });
@@ -177,6 +176,56 @@ export class Enemy implements Hittable {
     this.controller.setMaxSlopeClimbAngle((50 * Math.PI) / 180);
 
     this.character.muzzleAnchor.add(this.muzzleFlash.root); // at the rifle muzzle
+  }
+
+  /** The look this bot was built with — pooled bots are reused only for the same look. */
+  get soldierLook(): Archetype['soldier'] {
+    return this.arch.soldier;
+  }
+
+  /** (Re)enter a round at `spawn` with (difficulty-scaled) `arch` — a full state reset. */
+  activate(spawn: THREE.Vector3, arch: Archetype): void {
+    this.arch = arch;
+    this.hp = arch.maxHp;
+    this.pos.copy(spawn);
+    this.prevPos.copy(spawn);
+    this.vel.set(0, 0, 0);
+    this.yaw = 0;
+    this.state = 'patrol';
+    this.animState = 'idle';
+    this.path.length = 0;
+    this.pathIndex = 0;
+    this.repathTimer = 0;
+    this.waitTimer = 0;
+    this.reactionTimer = 0;
+    this.fireTimer = 0;
+    this.searchTimer = 0;
+    this.graceTimer = GRACE_T;
+    this.losTime = 0;
+    this.lostTimer = 0;
+    this.strafeDir = 0;
+    this.strafeTimer = 0;
+    this.aimPitch = 0;
+    this.tokenT = 0;
+    this.tokenCool = 0;
+    this.lastKnown.copy(spawn);
+    this.muzzleFlash.hide();
+    this.character.reset();
+    this.group.position.copy(spawn);
+    this.group.rotation.set(0, 0, 0);
+    this.group.visible = true;
+    this.setPhysics(true);
+    this.body.setTranslation(spawn, true);
+    this.body.setNextKinematicTranslation(spawn);
+  }
+
+  /** Leave the round (level reset): hidden, physics off, kept for reuse. */
+  deactivate(): void {
+    this.dropToken();
+    this.setPhysics(false);
+    this.muzzleFlash.hide();
+    this.group.visible = false;
+    this.state = 'dead';
   }
 
   get isDead(): boolean {
@@ -210,7 +259,7 @@ export class Enemy implements Hittable {
     this.muzzleFlash.hide();
     this.deps.sfx.enemyDeath(this.pos);
     this.dropToken();
-    this.removePhysics(); // the corpse stays visible but never blocks shots or movement
+    this.setPhysics(false); // the corpse stays visible but never blocks shots or movement
   }
 
   private dropToken(): void {
@@ -218,13 +267,13 @@ export class Enemy implements Hittable {
     this.tokenT = 0;
   }
 
-  private removePhysics(): void {
-    if (!this.physicsLive) return;
-    this.physicsLive = false;
-    this.deps.registry.unregister(this.collider.handle);
-    this.deps.world.removeCharacterController(this.controller);
-    this.deps.world.removeCollider(this.collider, false);
-    this.deps.world.removeRigidBody(this.body);
+  private setPhysics(on: boolean): void {
+    if (on === this.physicsOn) return;
+    this.physicsOn = on;
+    this.body.setEnabled(on);
+    this.collider.setEnabled(on);
+    if (on) this.deps.registry.register(this.collider.handle, this);
+    else this.deps.registry.unregister(this.collider.handle);
   }
 
   /** Player gunfire heard from `pos`. */
@@ -511,6 +560,13 @@ export class Enemy implements Hittable {
 
     // Accuracy ramp on fresh acquisition + penalty when shooting from outside the player's view.
     let mul = 1 + (RAMP_MUL - 1) * Math.max(0, 1 - this.losTime / RAMP_T);
+    // Partial cover: only head/shoulders exposed → the upper-torso probe is blocked.
+    this._chest.copy(this._pEye);
+    this._chest.y -= COVER_DROP;
+    const chestDist = this._chest.distanceTo(this._eye);
+    this._chest.sub(this._eye).multiplyScalar(1 / chestDist); // now the probe direction
+    const torso = this.deps.world.castRay(this.coverRay, chestDist + 0.4, true, undefined, undefined, this.collider);
+    if (!torso || torso.collider.handle !== this.deps.player.colliderHandle) mul *= COVER_MUL;
     let offscreen = false;
     const view = this.deps.player.viewDir;
     if (view) {
@@ -535,11 +591,10 @@ export class Enemy implements Hittable {
     this._toPlayer.subVectors(this._aim, this._eye).normalize();
 
     const hit = this.deps.world.castRay(this.ray, this.arch.fireRange, true, undefined, undefined, this.collider);
+    const hitPlayer = hit !== null && hit.collider.handle === this.deps.player.colliderHandle;
     if (hit) {
       this._end.copy(this._eye).addScaledVector(this._toPlayer, hit.timeOfImpact);
-      if (hit.collider.handle === this.deps.player.colliderHandle) {
-        this.deps.player.applyDamage(this.arch.damage, this.pos);
-      }
+      if (hitPlayer) this.deps.player.applyDamage(this.arch.damage, this.pos);
     } else {
       this._end.copy(this._eye).addScaledVector(this._toPlayer, this.arch.fireRange);
     }
@@ -550,6 +605,11 @@ export class Enemy implements Hittable {
     const tq = Math.min(tc, len);
     const missSq = this._aim.addScaledVector(this._toPlayer, -tq).lengthSq(); // eye ↔ ray point
     if (tc > 0 && missSq < NEAR_MISS * NEAR_MISS) {
+      // A round that actually flew past (not one stopped short by cover) cracks by the ear.
+      if (!hitPlayer && tc <= len) {
+        this._aim.copy(this._eye).addScaledVector(this._toPlayer, tc);
+        this.deps.sfx.nearMiss(this._aim);
+      }
       this._end.copy(this._eye).addScaledVector(this._toPlayer, Math.max(0.3, tq - NEAR_MISS));
     }
 
@@ -561,7 +621,7 @@ export class Enemy implements Hittable {
     return offscreen;
   }
 
-  /** Per-frame visual update (interpolated). Corpses persist until `dispose()`. */
+  /** Per-frame visual update (interpolated). Corpses persist until `deactivate()`. */
   render(alpha: number, dt: number): void {
     this.character.play(this.animState);
     this.character.aim(this.state === 'engage' || this.state === 'alert', this.aimPitch);
@@ -573,16 +633,6 @@ export class Enemy implements Hittable {
       this.prevPos.z + (this.pos.z - this.prevPos.z) * alpha,
     );
     this.group.rotation.set(0, this.yaw, 0); // death is handled by the Death animation
-  }
-
-  /** Remove from scene + physics. Called on level reset / restart. */
-  dispose(): void {
-    this.deps.scene.remove(this.group);
-    // Character + muzzle-flash geometry/materials are shared across enemies; the soldier only
-    // releases its per-instance resources.
-    this.character.dispose();
-    this.dropToken();
-    this.removePhysics();
   }
 
   /** QA/utility: current world position (capsule centre). */

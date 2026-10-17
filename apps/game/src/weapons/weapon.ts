@@ -3,23 +3,26 @@
  *
  * Gunfeel:
  *  - Recoil moves the aim. Every shot kicks along a fixed, learnable pattern (first five shots
- *    climb almost straight up, then a gentle left/right drift). Part of each kick is a
- *    transient camera offset (`recoil`, recovers after release); the rest is a permanent aim
- *    change the player controller drains via `consumeAimKick()` — so only ~55% recovers.
+ *    climb almost straight up, then a small left/right sway with a slight right bias). Most of
+ *    each kick is a transient camera offset (`recoil`, recovers after release); the rest is a
+ *    permanent aim change the player controller drains via `consumeAimKick()`.
  *  - Hip fire has a bloom cone (3° → 6° under sustained fire, +1.5° while moving via
  *    `moveSpread01`); ADS is near pin-point.
  *  - Visual punch: camera roll (`recoil.roll`) and a brief FOV kick (`fovPunch`).
- *  - Wall probe: a forward ray from the eye pulls the viewmodel back/low near geometry so the
- *    barrel never pokes through walls.
+ *  - Sprint (`setSprinting`): rifle cants low; no ADS, and firing waits for a ~0.2 s sprint-out.
+ *  - Wall probe: a forward ray from the eye pulls the viewmodel back/low near geometry.
+ *  - Spent brass ejects from the port (pooled, one draw).
  * Combat: magazine + reserve with tactical (1.7 s, keeps the chambered round → 30+1) and empty
- * (2.2 s, bolt release) reloads; damage through the HitRegistry (headshot multiplier).
+ * (2.2 s, bolt release) reloads, each beat voiced via `Sfx.reloadBeat`; damage through the
+ * HitRegistry (headshot multiplier).
  * One preallocated RAPIER.Ray serves every query — no per-shot/per-frame allocation on our side.
  */
 import * as THREE from 'three/webgpu';
 import { RAPIER } from '../physics/world';
 import type RAPIER_NS from '@dimforge/rapier3d-compat';
 import { DecalPool } from './decals';
-import { Viewmodel } from './viewmodel';
+import { RELOAD_SFX, Viewmodel, type ViewmodelState } from './viewmodel';
+import { BrassPool } from './brass';
 import { MuzzleFlash } from '../vfx/muzzleFlash';
 import type { Tracers } from '../vfx/tracers';
 import type { HitRegistry } from '../combat/hittable';
@@ -40,9 +43,11 @@ const HEAD_MULT = 2.3;
 
 // Recoil (per shot).
 const KICK_HIP = 0.6 * DEG;
-const KICK_ADS = 0.42 * DEG;
-/** Share of each kick that is transient (returns after release); the rest moves the aim. */
-const RECOVERABLE = 0.65;
+const KICK_ADS = 0.3 * DEG;
+const FIRST_SHOT = 1.5; // the first round jumps hardest
+/** Share of each kick that is transient (returns after release) at hip … ADS. */
+const RECOVERABLE_HIP = 0.65;
+const RECOVERABLE_ADS = 0.78;
 const ROLL_KICK = 0.4 * DEG;
 /** Seconds without a shot before the pattern restarts and recovery speeds up. */
 const BURST_GAP = 0.22;
@@ -55,14 +60,29 @@ const SPREAD_MOVE = 1.5;
 const SPREAD_ADS = 0.12;
 const SPREAD_RECOVERY = 7; // deg/s back to base once the trigger is released
 
+// Movement coupling.
+const ADS_MOVE_SCALE = 0.55;
+const SPRINT_OUT = 0.2; // s after sprint ends before the rifle can fire
+
 /** Eye-to-wall distance (m) where the viewmodel starts pulling back (muzzle reach ≈ 0.85 m). */
 const WALL_PROBE = 0.95;
 const WALL_FULL = 0.45;
 
-/** Horizontal kick (deg) for shot n of a burst: ~vertical first, then a slow learnable sway. */
+/** Eye height above the feet when standing (brass ground-plane fallback). */
+const EYE_HEIGHT = 1.62;
+
+/**
+ * Horizontal kick (deg, + = left) for shot n of a burst: nearly vertical for the first five,
+ * then a fixed ±0.06–0.1° sway with a slight right bias — the same every burst, so learnable.
+ */
 function patternYawDeg(n: number): number {
-  if (n < 5) return n % 2 === 0 ? 0.02 : -0.02;
-  return 0.15 * Math.sin((n - 5) * 0.55 + 0.6);
+  const sway = 0.08 * Math.sin(n * 1.9 + 0.7);
+  return n < 5 ? 0.35 * sway - 0.01 : sway - 0.025;
+}
+
+/** True when the reload clock passed time `t` between two frames. */
+function crossed(prev: number, now: number, t: number): boolean {
+  return prev < t && now >= t;
 }
 
 export interface ViewRecoil {
@@ -91,6 +111,8 @@ export class RaycastWeapon {
   readonly recoil: ViewRecoil = { pitch: 0, yaw: 0, roll: 0 };
   /** 0 (still) … 1 (full speed): widens the hip-fire cone. Fed by the player controller. */
   moveSpread01 = 0;
+  /** World y of the floor under the player (brass bounces here). Null → eye height − 1.62 m. */
+  groundY: number | null = null;
 
   private mag = MAG_SIZE;
   private reserve = START_RESERVE;
@@ -99,11 +121,22 @@ export class RaycastWeapon {
   private emptyReload = false;
   private cooldown = 0;
   private prevReload = false;
+  private aimHeld = false;
 
   /** Carbine + gloved hands (createRifle('viewmodel') inside), attached to the camera. */
   private readonly viewmodel = new Viewmodel();
-  private readonly muzzleFlash = new MuzzleFlash(0.16);
+  private readonly vmState: ViewmodelState = {
+    ads: 0,
+    kick: 0,
+    roll: 0,
+    reload: -1,
+    empty: false,
+    obstruct: 0,
+    sprint: 0,
+  };
+  private readonly muzzleFlash = new MuzzleFlash(0.11);
   private readonly muzzleLight: THREE.PointLight;
+  private readonly brass = new BrassPool();
   private kick = 0;
   private ads = 0; // 0 hip … 1 aimed
   private shotIndex = 0; // position in the recoil pattern
@@ -111,6 +144,9 @@ export class RaycastWeapon {
   private hipSpread = SPREAD_HIP;
   private fovKick = 0;
   private obstruct = 0; // 0 clear … 1 muzzle against a wall
+  private sprintWanted = false;
+  private sprint = 0; // 0 ready … 1 full sprint pose
+  private sprintOut = 0; // s left before firing is allowed after a sprint
   /** Permanent aim change (rad) not yet handed to the player controller. */
   private readonly pendingAim = { pitch: 0, yaw: 0 };
 
@@ -127,6 +163,22 @@ export class RaycastWeapon {
   /** Current full cone angle (degrees) of the shot spread — for a dynamic crosshair. */
   get spreadDeg(): number {
     return THREE.MathUtils.lerp(this.hipSpread + SPREAD_MOVE * this.moveSpread01, SPREAD_ADS, this.ads);
+  }
+
+  /** Move-speed multiplier the player should apply: 1 at hip … 0.55 fully aimed. */
+  get moveSpeedScale(): number {
+    return THREE.MathUtils.lerp(1, ADS_MOVE_SCALE, this.ads);
+  }
+
+  /** Whether the player may sprint right now (not while aiming). */
+  get sprintAllowed(): boolean {
+    return !this.aimHeld && this.ads < 0.25;
+  }
+
+  /** Player sprint state (feed `player.sprinting` every frame). */
+  setSprinting(on: boolean): void {
+    if (this.sprintWanted && !on) this.sprintOut = SPRINT_OUT;
+    this.sprintWanted = on;
   }
 
   /**
@@ -154,6 +206,9 @@ export class RaycastWeapon {
   private readonly _normal = new THREE.Vector3();
   private readonly _right = new THREE.Vector3();
   private readonly _up = new THREE.Vector3();
+  private readonly _port = new THREE.Vector3();
+  private readonly _eject = new THREE.Vector3();
+  private readonly _portQ = new THREE.Quaternion();
 
   constructor(
     private readonly camera: THREE.PerspectiveCamera,
@@ -167,8 +222,7 @@ export class RaycastWeapon {
 
     this.viewmodel.muzzle.add(this.muzzleFlash.root);
 
-    // Flash light sits half a metre down-range: it lights the surroundings and the gun from the
-    // front, instead of blowing out the optic at inverse-square range.
+    // Flash light sits down-range (further when aimed, so it can't light up the optic tube).
     this.muzzleLight = new THREE.PointLight(0xffc27a, 0, 8, 2);
     this.muzzleLight.position.set(0, 0, -0.5);
     this.viewmodel.muzzle.add(this.muzzleLight);
@@ -193,16 +247,20 @@ export class RaycastWeapon {
     // quantising 700 RPM down to 600 at 60 fps) without banking shots while idle.
     this.cooldown = Math.max(this.cooldown - dt, -dt);
     this.sinceShot += dt;
+    this.sprintOut = Math.max(0, this.sprintOut - dt);
+    this.aimHeld = aimHeld;
 
     if (reloadHeld && !this.prevReload) this.startReload();
     this.prevReload = reloadHeld;
 
+    const prevReloadT = this.reloadTimer > 0 ? this.reloadDuration - this.reloadTimer : -1;
     if (this.reloadTimer > 0) {
       this.reloadTimer -= dt;
       if (this.reloadTimer <= 0) this.finishReload();
     } else {
       const wantsFire = fireHeld || firePressed > 0;
-      if (wantsFire && this.cooldown <= 0) {
+      const ready = !this.sprintWanted && this.sprintOut <= 0;
+      if (wantsFire && ready && this.cooldown <= 0) {
         if (this.mag > 0) {
           this.fire();
           this.mag -= 1;
@@ -213,13 +271,15 @@ export class RaycastWeapon {
         }
       }
     }
+    const reloadT = this.reloadTimer > 0 ? this.reloadDuration - this.reloadTimer : -1;
+    this.voiceReload(prevReloadT, reloadT);
 
-    // Aim-down-sights: reloading or a wall in the face forces hip.
-    const wantAds = aimHeld && this.reloadTimer <= 0 && this.obstruct < 0.5;
+    // Aim-down-sights: reloading, sprinting or a wall in the face forces hip.
+    const wantAds = aimHeld && this.reloadTimer <= 0 && this.obstruct < 0.5 && !this.sprintWanted;
     this.ads = THREE.MathUtils.damp(this.ads, wantAds ? 1 : 0, 16, dt);
+    this.sprint = THREE.MathUtils.damp(this.sprint, this.sprintWanted ? 1 : 0, 13, dt);
 
-    // Recovery: barely while the trigger is held, brisk once released (transient part only),
-    // so ~55% of the climb at release comes back.
+    // Recovery: barely while the trigger is held, brisk once released (transient part only).
     const released = this.sinceShot > BURST_GAP;
     if (released) this.shotIndex = 0;
     const rec = released ? 7 : 0.6;
@@ -232,11 +292,37 @@ export class RaycastWeapon {
 
     this.probeWall(dt);
 
-    const reloadT = this.reloadTimer > 0 ? this.reloadDuration - this.reloadTimer : -1;
-    this.viewmodel.update(dt, this.ads, this.kick, this.recoil.roll, reloadT, this.emptyReload, this.obstruct);
+    const s = this.vmState;
+    s.ads = this.ads;
+    s.kick = this.kick;
+    s.roll = this.recoil.roll;
+    s.reload = reloadT;
+    s.empty = this.emptyReload;
+    s.obstruct = this.obstruct;
+    s.sprint = this.sprint;
+    this.viewmodel.update(dt, s);
 
     this.muzzleFlash.update(dt);
     this.muzzleLight.intensity = THREE.MathUtils.damp(this.muzzleLight.intensity, 0, 30, dt);
+
+    if (!this.brass.mesh.parent) this.attachBrass();
+    const ground = this.groundY ?? this._rayOrigin.y - EYE_HEIGHT;
+    this.brass.update(dt, ground);
+  }
+
+  /** Brass lives in world space: hang it off the scene root once the camera is in a scene. */
+  private attachBrass(): void {
+    let root: THREE.Object3D = this.camera;
+    while (root.parent) root = root.parent;
+    if (root !== this.camera) root.add(this.brass.mesh);
+  }
+
+  /** Sound the reload beats the animation crosses this frame (mag-out plays at start). */
+  private voiceReload(prev: number, now: number): void {
+    if (now < 0) return;
+    if (crossed(prev, now, RELOAD_SFX.magIn)) this.hooks.sfx.reloadBeat('magIn');
+    if (crossed(prev, now, RELOAD_SFX.slap)) this.hooks.sfx.reloadBeat('slap');
+    if (this.emptyReload && crossed(prev, now, RELOAD_SFX.bolt)) this.hooks.sfx.reloadBeat('bolt');
   }
 
   /** Forward ray from the eye; the closer the hit, the further the gun pulls back. */
@@ -269,8 +355,8 @@ export class RaycastWeapon {
   }
 
   /**
-   * Back to a neutral hip pose (new round / respawn): no carried-over ADS, kick, flash or
-   * half-finished reload (ammo counts are left as they are).
+   * Back to a neutral hip pose (new round / respawn): no carried-over ADS, kick, flash, brass
+   * or half-finished reload (ammo counts are left as they are).
    */
   resetPose(): void {
     if (this.reloadTimer > 0) {
@@ -285,9 +371,16 @@ export class RaycastWeapon {
     this.hipSpread = SPREAD_HIP;
     this.shotIndex = 0;
     this.obstruct = 0;
+    this.sprint = this.sprintOut = 0;
+    this.sprintWanted = false;
     this.muzzleFlash.hide();
     this.muzzleLight.intensity = 0;
-    this.viewmodel.update(0, 0, 0, 0, -1, false, 0);
+    this.brass.clear();
+    const s = this.vmState;
+    s.ads = s.kick = s.roll = s.obstruct = s.sprint = 0;
+    s.reload = -1;
+    s.empty = false;
+    this.viewmodel.update(0, s);
   }
 
   /** Fire a single shot immediately, ignoring cooldown/ammo (QA harness only). */
@@ -301,7 +394,7 @@ export class RaycastWeapon {
     // Shot direction: crosshair ray bent by a random point in the spread cone.
     this.camera.getWorldPosition(this._rayOrigin);
     this.camera.getWorldDirection(this._rayDir);
-    const half = (this.spreadDeg * 0.5 * DEG) * Math.sqrt(Math.random());
+    const half = this.spreadDeg * 0.5 * DEG * Math.sqrt(Math.random());
     const a = Math.random() * Math.PI * 2;
     const t = Math.tan(half);
     this._right.setFromMatrixColumn(this.camera.matrixWorld, 0).normalize();
@@ -347,17 +440,28 @@ export class RaycastWeapon {
     this.hooks.tracers.spawn(this._muzzleWorld, endPoint);
     this.hooks.muzzleFx(this._muzzleWorld, this._rayDir);
 
-    this.muzzleFlash.fire();
-    this.muzzleLight.intensity = 6;
+    // Aimed: a small flash and a dim light far down-range so neither washes out the optic.
+    const aimed = this.ads > 0.5;
+    this.muzzleFlash.fire(0.045, aimed ? 0.3 : 1);
+    this.muzzleLight.position.z = aimed ? -1.2 : -0.5;
+    this.muzzleLight.intensity = aimed ? 1.2 : 6;
+
+    // Brass: out of the ejection port, back-right and a little up.
+    const port = this.viewmodel.ejectionPort;
+    port.getWorldPosition(this._port);
+    port.getWorldQuaternion(this._portQ);
+    this._eject.set(0.88, 0.42, 0.24).normalize().applyQuaternion(this._portQ);
+    this.brass.eject(this._port, this._eject);
 
     // Recoil along the pattern: split into transient view kick + permanent aim change.
     const n = this.shotIndex;
-    const pitch = THREE.MathUtils.lerp(KICK_HIP, KICK_ADS, this.ads) * (n < 5 ? 1 : 0.8);
+    const pitch = THREE.MathUtils.lerp(KICK_HIP, KICK_ADS, this.ads) * (n === 0 ? FIRST_SHOT : n < 5 ? 1 : 0.85);
     const yaw = (patternYawDeg(n) + (Math.random() - 0.5) * 0.04) * DEG;
-    this.recoil.pitch += pitch * RECOVERABLE;
-    this.recoil.yaw += yaw * RECOVERABLE;
-    this.pendingAim.pitch += pitch * (1 - RECOVERABLE);
-    this.pendingAim.yaw += yaw * (1 - RECOVERABLE);
+    const keep = THREE.MathUtils.lerp(RECOVERABLE_HIP, RECOVERABLE_ADS, this.ads);
+    this.recoil.pitch += pitch * keep;
+    this.recoil.yaw += yaw * keep;
+    this.pendingAim.pitch += pitch * (1 - keep);
+    this.pendingAim.yaw += yaw * (1 - keep);
     this.recoil.roll += (n % 2 === 0 ? 1 : -1) * ROLL_KICK * (0.7 + Math.random() * 0.3);
     this.fovKick = 1;
     this.kick = Math.min(1, this.kick + 0.7);

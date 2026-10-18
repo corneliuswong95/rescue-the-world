@@ -1,12 +1,10 @@
 /**
  * Geometry toolkit for the code-authored soldier: rounded, organic primitives (lofted
  * super-elliptic tubes for anatomy, swept bands for straps/cables, a parametric helmet shell)
- * and a PartSink that bakes many parts into ONE indexed geometry per rigid segment, with the
+ * and a PartSink that bakes many parts into ONE indexed geometry (one rigid gear piece), with the
  * per-vertex surface attributes the shared soldier material reads (`albedo`, `surf`).
  *
- * Everything is authored in model space (feet at y = 0, forward = -Z, right = +X) and
- * re-expressed relative to the segment pivot at build time. Build-time only — nothing here runs
- * per frame.
+ * Build-time only — nothing here runs per frame.
  */
 import * as THREE from 'three/webgpu';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
@@ -80,26 +78,6 @@ export function loft(sections: Section[], radial: number, capBottom = true, capT
   g.setIndex(idx);
   g.computeVertexNormals();
   return g;
-}
-
-/** Profile-driven limb along +Y: `prof` = [t, rx, rz, z?, rip?] with t ∈ [0, 1] along `len`. */
-export function limb(
-  len: number,
-  prof: ReadonlyArray<readonly [number, number, number, number?, number?]>,
-  radial = 14,
-  n = 2,
-): THREE.BufferGeometry {
-  const secs: Section[] = prof.map(([t, rx, rz, z, rip], i) => ({
-    y: t * len,
-    rx,
-    rz,
-    z: z ?? 0,
-    n,
-    rip: rip ?? 0,
-    ripK: 5 + (i % 3),
-    ripP: i * 1.7,
-  }));
-  return loft(secs, radial);
 }
 
 const _up = new THREE.Vector3(0, 1, 0);
@@ -311,7 +289,11 @@ export class PartSink {
     geo.dispose();
   }
 
-  /** Bakes everything relative to `pivot` (the segment's joint in model space). */
+  get triangles(): number {
+    return this.idx.length / 3;
+  }
+
+  /** Bakes everything relative to `pivot`. */
   build(pivot: THREE.Vector3): THREE.BufferGeometry {
     for (let i = 0; i < this.pos.length; i += 3) {
       this.pos[i] -= pivot.x;

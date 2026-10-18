@@ -153,7 +153,11 @@ function spawnEnemies(): void {
 }
 
 player.onDamaged = (rel) => hud.damageFrom(rel);
-player.onFootstep = () => audio.footstep();
+const _stepPos = new THREE.Vector3();
+player.onFootstep = () => {
+  audio.footstep();
+  enemies.hearFootstep(player.eye(_stepPos), player.speed); // sprinting steps carry ~7.5 m
+};
 player.onDied = () => {
   if (gameState === 'playing') lose();
 };
@@ -482,6 +486,8 @@ installQaHooks({
         }
         aimAt(from, _qaTmp);
       }
+      // Let animation (not the sim) run ~1.5 s so a killed bot is shown mid/after its death fall.
+      for (let i = 0; i < 90; i++) enemies.render(1, 1 / 60);
       qaFreeze = true;
     },
     // Freeze-frame the instant of firing so the (real, but transient) muzzle flash, tracer,

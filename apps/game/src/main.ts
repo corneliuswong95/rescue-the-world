@@ -26,6 +26,7 @@ import { HitRegistry } from './combat/hittable';
 import { Tracers } from './vfx/tracers';
 import { ParticleFx } from './vfx/particles';
 import { EnemyManager } from './ai/enemies';
+import { loadSoldierAssets } from './ai/soldierAssets';
 import { RIFLEMAN, RUSHER, HEAVY, scaleArchetype, type Archetype } from './ai/archetypes';
 import { AudioEngine } from './audio/audio';
 import { loadSettings, saveSettings, DIFFICULTY_VALUE, type Settings, type Quality } from './game/settings';
@@ -73,6 +74,7 @@ const [sky, levelMats, levelAssets] = await Promise.all([
   setupEnvironment(renderer, scene, SUN_AZIMUTH),
   loadLevelMaterials(),
   loadLevelAssets(),
+  loadSoldierAssets(),
 ]);
 const sun = createSun(scene, sky);
 applyHaze(scene, sky);

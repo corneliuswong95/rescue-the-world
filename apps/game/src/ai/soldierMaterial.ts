@@ -1,11 +1,12 @@
 /**
- * The single shared PBR material every soldier segment renders with (TSL → WGSL/GLSL). Per-part
+ * The single shared PBR material every soldier renders with (TSL → WGSL/GLSL). Per-part
  * looks come from baked vertex attributes, so all archetypes and all body parts batch through
  * one shader program:
  *   albedo (vec3, linear)  — base colour (archetype tint + baked dust)
  *   surf   (vec4)          — x roughness, y metalness, z camo scale (0 = none), w pattern id
  *
- * Patterns are procedural on `positionLocal` (segment space, so they stick to animated limbs):
+ * Patterns are procedural on `positionGeometry` — the bind-pose vertex position, before skinning
+ * — so they stay printed on the cloth while the skeleton animates:
  *   - Fabric:  original 4-colour blotch camouflage (layered MaterialX noise thresholds, derived
  *              from the base tint — generic, not any trademarked pattern) + fold wrinkles + weave.
  *   - Cordura: plate-carrier nylon — horizontal PALS/webbing rows + weave + mottling.
@@ -29,7 +30,7 @@ import {
   mx_noise_float,
   normalView,
   normalWorld,
-  positionLocal,
+  positionGeometry,
   positionView,
   select,
   sin,
@@ -76,7 +77,7 @@ function buildMaterial(): THREE.MeshStandardNodeMaterial {
   const albedo = attribute<'vec3'>('albedo', 'vec3');
   const surf = attribute<'vec4'>('surf', 'vec4');
   const pat = surf.w;
-  const p = positionLocal;
+  const p = positionGeometry;
 
   const mFab = is(pat, PAT.fabric);
   const mCor = is(pat, PAT.cordura);

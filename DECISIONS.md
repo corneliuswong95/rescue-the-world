@@ -94,3 +94,21 @@ Decision:
 Consequences: M1 (below target class), WebGPU, 1080p: high ≈ 60 fps, medium ≈ 75 fps; prod
 boot→menu ≈ 4.5 s on localhost (asset payload ≈ 26 MB still needs KTX2/streaming for the < 5 s
 broadband target — backlogged).
+
+## 2026-10-18 — Skinned CC0 soldiers (Quaternius) instead of code-built rigs
+
+Context: Both review agents capped character art at ~2.5/5: rigid code-built segments can't read
+as real people. The user chose the free route over Mixamo (which needs an Adobe account — its
+licence is per account).
+Decision: Quaternius **Universal Base Characters [Standard]** (Superhero Male body) + **Universal
+Animation Library [Standard]** clips, both shipped with CC0 licence files (Quaternius has since
+introduced a "QAL" licence for some newer releases — these packs' own files say CC0; re-check
+the bundled licence whenever adding more Quaternius content). Same 65-joint UE-style rig, so
+clips bind by bone name. Built by `tools/assets/build-characters.mjs` (mesh+skin only, no
+textures; 15 clips with finger/scale channels stripped → 375 KB total). The code-built kit
+(helmet, armour, pouches, rifle) becomes bone attachments; the body is shaded as a uniform.
+The free tier has no rifle clips: the rifle hold is two-bone arm IK over the two-handed
+`Pistol_Aim_*` poses, blended by aim pitch.
+Consequences: Skinned meshes + per-soldier AnimationMixer (pooled, parked bots don't tick). Paid
+tiers (Pro rifle clips, Regular-proportion bodies) would improve fidelity further but are not
+needed to ship.

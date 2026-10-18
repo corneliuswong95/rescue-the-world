@@ -11,6 +11,8 @@ noted) — content unchanged otherwise.
 | Asset | Type | Source | License | Notes |
 |---|---|---|---|---|
 | qwantani_late_afternoon_puresky (2k) | HDRI | polyhaven.com/a/qwantani_late_afternoon_puresky | CC0 | Sky, IBL and sun direction (late-afternoon key). `public/assets/hdri/` |
+| Universal Base Characters [Standard] — Superhero Male body | Rigged character mesh | Quaternius — quaternius.itch.io/universal-base-characters (free tier) | CC0 (License_Standard.txt in pack) | Enemy soldier body (no textures shipped). `public/assets/characters/soldier_body.glb` via `tools/assets/build-characters.mjs` |
+| Universal Animation Library [Standard] — 15 clips | Animations | Quaternius — quaternius.itch.io/universal-animation-library (free tier) | CC0 (License.txt in pack) | Locomotion, crouch, aim, hit, death clips. `public/assets/characters/soldier_anims.glb` |
 | Foundry Yard light probe | Baked data | Generated in-engine from the assets above (`tools/assets/bake-probe.mjs`) | CC0 (derived) | `public/assets/hdri/foundry_yard_probe.bin` |
 | asphalt_02 (2k) | PBR texture | polyhaven.com/a/asphalt_02 | CC0 | Yard ground. `public/assets/textures/asphalt_02/` |
 | dirty_concrete (2k) | PBR texture | polyhaven.com/a/dirty_concrete | CC0 | Sidewalks. `public/assets/textures/dirty_concrete/` |
@@ -36,7 +38,8 @@ noted) — content unchanged otherwise.
 | Metal Jerrycan (green) | Model | polyhaven.com/a/metal_jerrycan_green | CC0 | Equipment corner. |
 | Modular Fire Escape | Model | polyhaven.com/a/modular_fire_escape | CC0 | North building. |
 
-**Note:** the soldier, rifle, first-person hands and all their materials are **original
-geometry/shaders authored in code** (`ai/soldier*.ts`, `weapons/*.ts`), not third-party assets.
+**Note:** soldier *bodies and animations* are Quaternius CC0 (above); their uniforms, armour, helmet,
+kit, the rifle, first-person hands and all their materials are **original geometry/shaders
+authored in code** (`ai/soldier*.ts`, `weapons/*.ts`).
 Real-world military equipment and CoD/other games were used only as visual *references* to
 observe (rule 3), never as a source of files, patterns, markings or names.

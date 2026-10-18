@@ -15,12 +15,18 @@
  *     the handguard of where the rifle actually is. The rifle is parented to the right hand, so
  *     it can never drift off the grip; fingers are curled round grip and handguard once;
  *  5. ground — the lowest sole (alive) or lowest hull point (dying) is pinned to the floor.
- * Death plays Death01 (rifle stays in the dead hand), then the corpse is frozen (no ticking).
+ * Strafing turns the hips fully onto the travel line (forward or backpedal, whichever is closer)
+ * while spine_01–03 keep the rifle on target. A body hit shoves the torso and knocks the muzzle
+ * off target for ~80 ms. Death: Death01 or its mirror, at a random rate, turned to fall away
+ * from the shooter; the rifle is released mid-fall, and the corpse freezes (no ticking).
+ * Hits are resolved against per-bone volumes (`trace`, see hitBody.ts).
  */
 import * as THREE from 'three/webgpu';
 import { createRifle } from '../weapons/rifle';
 import { cloneSoldierRig, soldierClips, type AimName, type LocoName } from './soldierAssets';
 import type { Kit } from './soldierKit';
+import { HitBody } from './hitBody';
+import type { TraceHit } from '../combat/hittable';
 
 export type AnimState = 'idle' | 'run' | 'dead';
 
@@ -35,6 +41,9 @@ export interface SoldierConfig {
 const GROUND = -0.9; // feet at the bottom of the 1.8 m capsule (root = capsule centre)
 const AIM_BLEND = 0.2; // s, in and out
 const DEATH_FADE = 0.15;
+const DEATH_START = 0.12; // s into Death01: skips its wind-up crouch
+const RIFLE_DROP = 0.6; // fraction of the death clip at which the rifle leaves the hand
+const BLOOD_AT = 0.72; // fraction of the death clip at which the body is down (blood pool)
 const PI = Math.PI;
 
 // --- Rifle hold, authored in the body's bind space (T-pose, facing +Z, the body's right = −X) ---
@@ -44,7 +53,7 @@ const RIFLE_YAW = 0.55; // rifle set left of the chest line → aiming blades th
 const READY_DROP = 0.55; // muzzle-down angle of the low-ready carry (relative to the chest)
 const READY_ELEV = -0.45; // barrel elevation the torso holds at low ready (rad)
 const GRIP_LOCAL = new THREE.Vector3(0, -0.075, 0.062); // pistol-grip centre, rifle space
-const GUARD_LOCAL = new THREE.Vector3(-0.004, -0.03, -0.14); // under the rear handguard, rifle space
+const GUARD_LOCAL = new THREE.Vector3(-0.004, -0.03, -0.22); // under the handguard, rifle space
 // Grip centre relative to the hand bone (hand-local): palm side is −X (right) / +X (left).
 const PALM_R = new THREE.Vector3(-0.035, 0.072, 0);
 const PALM_L = new THREE.Vector3(0.024, 0.07, 0);
@@ -58,11 +67,11 @@ const CURL_R: Record<string, [number, number, number]> = {
   thumb: [0.35, 0.45, 0.3],
 };
 const CURL_L: Record<string, [number, number, number]> = {
-  index: [0.85, 1.0, 0.75],
-  middle: [0.95, 1.05, 0.8],
-  ring: [1.0, 1.1, 0.8],
-  pinky: [1.05, 1.1, 0.8],
-  thumb: [0.15, 0.2, 0.1], // laid forward along the handguard (C-clamp)
+  index: [1.2, 1.15, 0.85],
+  middle: [1.3, 1.2, 0.9],
+  ring: [1.3, 1.2, 0.9],
+  pinky: [1.3, 1.2, 0.9],
+  thumb: [-0.5, 0.15, 0.1], // laid forward along the near side of the handguard
 };
 
 /** Hull points for ground contact while dying: bone + radius. */
@@ -114,12 +123,17 @@ export class Soldier {
   private readonly lower: THREE.AnimationAction[] = [];
   private readonly upper: THREE.AnimationAction[] = [];
   private readonly aimActs: THREE.AnimationAction[] = [];
-  private readonly death: THREE.AnimationAction;
+  private readonly deaths: THREE.AnimationAction[] = []; // Death01, mirrored
+  private death: THREE.AnimationAction;
   private readonly hits: THREE.AnimationAction[] = [];
+  private readonly hitBody: HitBody;
   private readonly locoSpeed: number[];
+  private readonly locoStride: number[]; // ground covered per cycle (m)
+  private readonly locoPhase: number[]; // phase offset aligning each loop's left-foot lead
   private readonly locoW = new Float32Array(4);
 
   private readonly bone: (n: string) => THREE.Object3D;
+  private readonly spine1: THREE.Object3D;
   private readonly spine2: THREE.Object3D;
   private readonly spine3: THREE.Object3D;
   private readonly pelvis: THREE.Object3D;
@@ -154,6 +168,25 @@ export class Soldier {
   private deathT = 0;
   private settled = false;
   private deathYaw = 0;
+  private deathRate = 1;
+  private deathDur = 1;
+  private bloodDone = false;
+  private hasCue = false;
+  private readonly cue = new THREE.Vector3();
+  // Rifle released from the dead hand: simple fall + settle in root space.
+  private rifleFree = false;
+  private rifleLanded = false;
+  private readonly rifleVel = new THREE.Vector3();
+  private readonly rifleFlat = new THREE.Quaternion();
+  private readonly rifleHomePos = new THREE.Vector3();
+  private readonly rifleHomeQuat = new THREE.Quaternion();
+  // Strafing legs: forward or backpedal (with hysteresis).
+  private backLegs = false;
+  // Hit flinch.
+  private flinchT = 1;
+  private flinchYaw = 0;
+  private flinchBody = 0;
+  private kickPitch = 0;
   private vf = 0;
   private vr = 0;
   private hasPrev = false;
@@ -203,6 +236,7 @@ export class Soldier {
       if (!b) throw new Error(`soldier rig: missing bone ${n}`);
       return b;
     };
+    this.spine1 = this.bone('spine_01');
     this.spine2 = this.bone('spine_02');
     this.spine3 = this.bone('spine_03');
     this.pelvis = this.bone('pelvis');
@@ -214,8 +248,8 @@ export class Soldier {
     this.hullR = HULL.map(([, r]) => r);
     this.soles = SOLES.map(([n]) => this.bone(n));
     this.soleH0 = SOLES.map(([, h]) => h);
-    this.spines = [this.spine2, this.spine3];
-    this.modBones = [this.pelvis, this.spine2, this.spine3, this.head, this.clavL];
+    this.spines = [this.spine1, this.spine2, this.spine3];
+    this.modBones = [this.pelvis, this.spine1, this.spine2, this.spine3, this.head, this.clavL];
     for (const a of [this.armR, this.armL]) this.modBones.push(a.upper, a.lower, a.hand);
     this.modBase = this.modBones.map((b) => b.quaternion.clone());
 
@@ -232,7 +266,10 @@ export class Soldier {
     const inv = this._q.copy(this.basisR).invert();
     this.rifle.quaternion.copy(inv);
     this.rifle.position.copy(GRIP_LOCAL).applyQuaternion(inv).negate().add(PALM_R);
+    this.rifleHomePos.copy(this.rifle.position);
+    this.rifleHomeQuat.copy(this.rifle.quaternion);
     this.armR.hand.add(this.rifle);
+    this.hitBody = new HitBody(this.bone, cfg.kit, cfg.scale);
 
     // Animation layers.
     this.mixer = new THREE.AnimationMixer(rig);
@@ -241,9 +278,13 @@ export class Soldier {
       this.upper.push(this.mixer.clipAction(clips.upper[k]));
     }
     for (const k of AIMS) this.aimActs.push(this.mixer.clipAction(clips.aim[k]));
-    this.death = this.mixer.clipAction(clips.death);
-    this.death.setLoop(THREE.LoopOnce, 1);
-    this.death.clampWhenFinished = true;
+    for (const c of [clips.death, clips.deathMirror]) {
+      const a = this.mixer.clipAction(c);
+      a.setLoop(THREE.LoopOnce, 1);
+      a.clampWhenFinished = true;
+      this.deaths.push(a);
+    }
+    this.death = this.deaths[0];
     for (const c of [clips.hitChest, clips.hitHead]) {
       const a = this.mixer.clipAction(c);
       a.blendMode = THREE.AdditiveAnimationBlendMode;
@@ -252,6 +293,8 @@ export class Soldier {
       this.hits.push(a);
     }
     this.locoSpeed = LOCO.map((k) => clips.speed[k]);
+    this.locoStride = LOCO.map((k) => clips.speed[k] * clips.lower[k].duration);
+    this.locoPhase = LOCO.map((k) => clips.phase[k]);
     for (const a of [...this.lower, ...this.upper, ...this.aimActs]) {
       a.play();
       a.timeScale = 0; // time is driven explicitly (phase-synced)
@@ -281,24 +324,77 @@ export class Soldier {
     this.aimPitch = 0;
     this.aimPitchGoal = 0;
     this.hasSole = false;
+    this.backLegs = false;
+    this.flinchT = 1;
+    this.kickPitch = 0;
+    this.bloodDone = false;
+    this.hasCue = false;
     this.model.rotation.y = PI;
-    this.death.stop();
+    for (const d of this.deaths) d.stop();
     for (const h of this.hits) h.stop();
+    if (this.rifleFree) {
+      this.armR.hand.add(this.rifle);
+      this.rifle.position.copy(this.rifleHomePos);
+      this.rifle.quaternion.copy(this.rifleHomeQuat);
+      this.rifleFree = false;
+    }
     this.model.position.set(0, GROUND, 0);
     this.update(0);
   }
 
   play(state: AnimState): void {
     if (state === this.state) return;
-    if (state === 'dead') {
-      this.deathT = 0;
-      this.deathYaw = (Math.random() * 2 - 1) * 0.9;
-      this.death.reset();
-      this.death.setEffectiveWeight(0);
-      this.death.play();
-      for (const h of this.hits) h.stop();
-    }
+    if (state === 'dead') this.startDeath();
     this.state = state;
+  }
+
+  /** Where the killing shot came from (world x/z); the body falls away from it. */
+  deathCue(x: number, z: number): void {
+    this.cue.set(x, 0, z);
+    this.hasCue = true;
+  }
+
+  /** Once, when the body is down: the ground point under the chest (for a blood pool). */
+  bloodCue(out: THREE.Vector3): boolean {
+    if (this.bloodDone || this.state !== 'dead' || this.death.time < BLOOD_AT * this.deathDur) return false;
+    this.bloodDone = true;
+    this.spine3.getWorldPosition(out);
+    // Off-centre a little so the pool spreads out from under one side of the torso.
+    out.x += (Math.random() - 0.5) * 0.3;
+    out.z += (Math.random() - 0.5) * 0.3;
+    out.y = this.root.matrixWorld.elements[13] + GROUND;
+    return true;
+  }
+
+  /** Precise ray test against the body's per-bone volumes (see hitBody.ts). */
+  trace(origin: THREE.Vector3, dir: THREE.Vector3, maxT: number, out: TraceHit): boolean {
+    return this.hitBody.trace(origin, dir, maxT, out);
+  }
+
+  private startDeath(): void {
+    this.deathT = 0;
+    this.death = this.deaths[Math.random() < 0.5 ? 0 : 1];
+    this.deathRate = 0.85 + Math.random() * 0.3;
+    this.deathDur = this.death.getClip().duration;
+    // Death01 falls backward: turn (gradually) to face the shooter ± 40°, so he falls away.
+    let yaw = (Math.random() * 2 - 1) * 0.7;
+    if (this.hasCue) {
+      this.root.getWorldPosition(this._wp);
+      const dx = this.cue.x - this._wp.x;
+      const dz = this.cue.z - this._wp.z;
+      const e = this.root.matrixWorld.elements;
+      const f = -(dx * e[8] + dz * e[10]);
+      const r = dx * e[0] + dz * e[2];
+      yaw += Math.atan2(-r, f); // rotation about +Y that turns −Z toward the shooter
+    }
+    this.deathYaw = Math.atan2(Math.sin(yaw), Math.cos(yaw));
+    for (const d of this.deaths) d.stop();
+    this.death.reset();
+    this.death.time = DEATH_START;
+    this.death.timeScale = this.deathRate;
+    this.death.setEffectiveWeight(0);
+    this.death.play();
+    for (const h of this.hits) h.stop();
   }
 
   /** Shoulder the rifle (`on`) and pitch the aim `pitch` rad above the horizontal. */
@@ -307,13 +403,21 @@ export class Soldier {
     this.aimPitchGoal = Math.max(-0.9, Math.min(0.9, pitch));
   }
 
-  /** Short hit reaction (additive upper-body Hit_Chest / Hit_Head). */
-  flinch(): void {
+  /**
+   * Hit reaction: additive Hit_Head, or for a body hit a strong Hit_Chest plus a torso shove and
+   * a muzzle knock (~80 ms) — the rifle visibly comes off target.
+   */
+  flinch(head = false): void {
     if (this.state === 'dead') return;
-    const a = this.hits[Math.random() < 0.7 ? 0 : 1];
+    const a = this.hits[head ? 1 : 0];
     a.reset();
-    a.setEffectiveWeight(0.9);
+    a.setEffectiveWeight(head ? 0.9 : 1.6);
     a.play();
+    if (!head) {
+      this.flinchT = 0;
+      this.flinchBody = 1;
+      this.flinchYaw = (Math.random() < 0.5 ? -1 : 1) * (0.18 + Math.random() * 0.12);
+    }
   }
 
   update(dt: number): void {
@@ -333,7 +437,12 @@ export class Soldier {
     // --- Locomotion weights (speed bands) + phase-synced time ---
     const v = Math.hypot(this.vf, this.vr);
     const theta = Math.atan2(this.vr, this.vf); // 0 fwd, ±π/2 strafe, ±π back
-    const back = Math.abs(theta) > 1.75;
+    // Legs run forward or backpedal, whichever is closer to the travel line (with hysteresis).
+    const absT = Math.abs(theta);
+    if (this.backLegs) {
+      if (absT < PI / 2 - 0.35) this.backLegs = false;
+    } else if (absT > PI / 2 + 0.35) this.backLegs = true;
+    const back = this.backLegs;
     const sp = this.locoSpeed;
     let wWalk = 0;
     let wJog = 0;
@@ -352,19 +461,19 @@ export class Soldier {
     w[1] = this.runW * wWalk;
     w[2] = this.runW * wJog;
     w[3] = this.runW * wSprint;
-    // Cycle rate at this speed for each loop, blended; backpedal plays the cycle in reverse.
-    let rate = 0;
+    // Cycle rate: the blended pose covers the weighted stride per cycle, so the planted foot
+    // stays put; backpedal plays the cycle in reverse.
+    let stride = 0;
     let wsum = 0;
     for (let i = 1; i < 4; i++) {
-      if (w[i] <= 0) continue;
-      rate += w[i] * (Math.max(v, 0.6) / sp[i]) / this.lower[i].getClip().duration;
+      stride += w[i] * this.locoStride[i];
       wsum += w[i];
     }
-    if (wsum > 0) this.phase = (((this.phase + (back ? -1 : 1) * (rate / wsum) * dt) % 1) + 1) % 1;
+    if (wsum > 0) this.phase = (((this.phase + ((back ? -1 : 1) * Math.max(v, 0.6) * wsum * dt) / stride) % 1) + 1) % 1;
     this.idleTime += dt;
     for (let i = 0; i < 4; i++) {
       const dur = this.lower[i].getClip().duration;
-      const t = i === 0 ? this.idleTime % dur : this.phase * dur;
+      const t = i === 0 ? this.idleTime % dur : ((this.phase + this.locoPhase[i]) % 1) * dur;
       this.lower[i].time = t;
       this.upper[i].time = t;
       this.lower[i].setEffectiveWeight(w[i]);
@@ -381,18 +490,39 @@ export class Soldier {
     this.runMixer(dt);
     this.frame();
 
-    // Pelvis turns toward the travel line (the torso aim below turns the shoulders back).
-    const travel = back ? theta - Math.sign(theta) * PI : theta;
-    const legYaw = -Math.max(-0.6, Math.min(0.6, travel)) * (back ? 0.6 : 1) * smooth(v / 0.8) * this.runW;
+    // Hips turn fully onto the travel line; spine_01–03 turn the shoulders back onto the target.
+    const travel = back ? (theta > 0 ? theta - PI : theta + PI) : theta;
+    const legYaw = -Math.max(-1.9, Math.min(1.9, travel)) * smooth(v / 0.8) * this.runW;
     if (legYaw !== 0) {
       this.rotateWorld(this.pelvis, this._up, legYaw);
       this.pelvis.updateMatrixWorld(true);
     }
 
     this.aimTorso(aw);
+    this.flinchTorso(dt);
     this.lookHead(aw);
     this.solveArms(aw);
     this.pinSoles(dt);
+  }
+
+  /** Body-hit shove (torso back, ~0.2 s) and muzzle knock (yaw + climb, ~80 ms). */
+  private flinchTorso(dt: number): void {
+    this.flinchT += dt;
+    const t = this.flinchT;
+    if (t > 0.45 || this.flinchBody <= 0) {
+      this.kickPitch = 0;
+      return;
+    }
+    const kick = t < 0.03 ? t / 0.03 : Math.exp(-(t - 0.03) / 0.05);
+    const push = t < 0.05 ? t / 0.05 : Math.exp(-(t - 0.05) / 0.12);
+    // Shove: ~17° back through the lower spine, so the upper torso moves 15–20 cm.
+    this.rotateWorld(this.spine1, this._right, 0.18 * push);
+    this.spine1.updateMatrixWorld(true);
+    this.rotateWorld(this.spine2, this._right, 0.12 * push);
+    this.spine2.updateMatrixWorld(true);
+    this.rotateWorld(this.spine3, this._up, this.flinchYaw * kick);
+    this.spine3.updateMatrixWorld(true);
+    this.kickPitch = 0.22 * kick;
   }
 
   // --- Internals -------------------------------------------------------------------------
@@ -458,7 +588,7 @@ export class Soldier {
 
   /** Barrel elevation the hold aims for: a steady low-ready droop, or the aim pitch. */
   private goalElevation(aw: number): number {
-    return READY_ELEV + (this.aimPitch - READY_ELEV) * aw;
+    return READY_ELEV + (this.aimPitch - READY_ELEV) * aw + this.kickPitch;
   }
 
   /**
@@ -479,7 +609,7 @@ export class Soldier {
   }
 
   /**
-   * Turn spine_02/03 (closed loop) so the held rifle points along the facing, at the aim pitch
+   * Turn spine_01–03 (closed loop) so the held rifle points along the facing, at the aim pitch
    * when shouldered or a steady low-ready droop otherwise — whatever the clip's posture.
    */
   private aimTorso(aw: number): void {
@@ -489,9 +619,9 @@ export class Soldier {
       const f = this._b.set(0, 0, -1).applyQuaternion(this._q); // barrel direction
       // Yaw: horizontal angle from the barrel to the facing direction (torso turns fully).
       const yaw = Math.atan2(f.x * this._fwd.z - f.z * this._fwd.x, f.x * this._fwd.x + f.z * this._fwd.z);
-      const yawC = -Math.max(-1.3, Math.min(1.3, yaw));
-      for (let i = 0; i < 2; i++) {
-        this.rotateWorld(this.spines[i], this._up, yawC * 0.5);
+      const yawC = -Math.max(-2.1, Math.min(2.1, yaw));
+      for (let i = 0; i < 3; i++) {
+        this.rotateWorld(this.spines[i], this._up, yawC / 3);
         this.spines[i].updateMatrixWorld(true);
       }
       if (aw > 0) {
@@ -499,7 +629,7 @@ export class Soldier {
         const pitch = this.goalElevation(aw) - Math.asin(Math.max(-1, Math.min(1, f.y)));
         const axis = this._c.crossVectors(f, this._up).normalize();
         const pitchC = Math.max(-0.5, Math.min(0.5, pitch)) * 0.5 * aw;
-        for (let i = 0; i < 2; i++) {
+        for (let i = 1; i < 3; i++) {
           this.rotateWorld(this.spines[i], axis, pitchC * 0.5);
           this.spines[i].updateMatrixWorld(true);
         }
@@ -531,7 +661,12 @@ export class Soldier {
     this._qT.copy(this._q).multiply(this.basisR); // hand world rotation
     const grip = this._c.copy(GRIP_LOCAL).applyMatrix4(m);
     const target = grip.sub(this._d.copy(PALM_R).multiplyScalar(s).applyQuaternion(this._qT));
-    const poleR = this._e.copy(this._right).multiplyScalar(0.6).addScaledVector(this._up, -0.8).addScaledVector(this._fwd, -0.2);
+    // Rifle elbow: down at ready, out ~40° when shouldered.
+    const poleR = this._e
+      .copy(this._right)
+      .multiplyScalar(0.6 + 0.1 * aw)
+      .addScaledVector(this._up, -0.8 + 0.1 * aw)
+      .addScaledVector(this._fwd, -0.2);
     this.ik(this.armR, target, this._qT, poleR);
 
     // Left hand onto the rifle where it actually is (it rides the right hand); the support
@@ -604,14 +739,45 @@ export class Soldier {
     }
     for (let i = 0; i < 3; i++) this.aimActs[i].setEffectiveWeight(this.aimActs[i].getEffectiveWeight() * (1 - fade));
     this.death.setEffectiveWeight(fade);
-    this.model.rotation.y = PI + this.deathYaw * smooth(this.deathT / 0.9); // twist as he falls
+    this.model.rotation.y = PI + this.deathYaw * smooth(this.deathT / 0.35); // turn as he goes
     this.runMixer(dt);
     // Lowest hull point on the floor: the body never sinks, and never hovers.
     const s = this.model.scale.x;
     let low = Infinity;
     for (let i = 0; i < this.hull.length; i++) low = Math.min(low, this.hull[i].matrixWorld.elements[13] - this.hullR[i] * s);
     this.model.position.y = GROUND - (low - this.model.matrixWorld.elements[13]);
-    this.settled = this.deathT > this.death.getClip().duration + 0.2;
+    if (!this.rifleFree && this.death.time >= RIFLE_DROP * this.deathDur) this.releaseRifle();
+    if (this.rifleFree) this.dropRifle(dt);
+    this.settled = this.death.time >= this.deathDur && this.rifleLanded;
+  }
+
+  /** Let go of the rifle: it keeps its world pose and falls in root space. */
+  private releaseRifle(): void {
+    this.rifleFree = true;
+    this.rifleLanded = false;
+    this.root.updateWorldMatrix(true, false);
+    this.root.attach(this.rifle);
+    this.rifleVel.set((Math.random() * 2 - 1) * 0.6, 0.5, -0.2 - Math.random() * 0.4);
+    // Lying target: barrel level along its current heading, rolled onto a side.
+    const f = this._b.set(0, 0, -1).applyQuaternion(this.rifle.quaternion);
+    const heading = Math.atan2(-f.x, -f.z);
+    this.rifleFlat.setFromAxisAngle(this._up, heading);
+    this._q.setFromAxisAngle(this._c.set(0, 0, 1), (Math.random() < 0.5 ? 1 : -1) * PI * 0.5);
+    this.rifleFlat.multiply(this._q);
+  }
+
+  private dropRifle(dt: number): void {
+    if (this.rifleLanded) return;
+    const p = this.rifle.position;
+    this.rifleVel.y -= 9.8 * dt;
+    p.addScaledVector(this.rifleVel, dt);
+    this.rifle.quaternion.slerp(this.rifleFlat, Math.min(1, dt * 6));
+    const rest = GROUND + 0.035;
+    if (p.y <= rest) {
+      p.y = rest;
+      this.rifle.quaternion.copy(this.rifleFlat);
+      this.rifleLanded = true;
+    }
   }
 
   // --- One-time setup ----------------------------------------------------------------------

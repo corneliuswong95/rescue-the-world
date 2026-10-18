@@ -17,20 +17,22 @@
  * Bots are pooled: the mesh rig, rifle, collider, body and controller are built once and reused
  * across rounds (`activate` / `deactivate`), so DEPLOY never rebuilds or recompiles anything.
  *
- * Registers its collider in the HitRegistry so the player's weapon damages it; headshots use a
- * height threshold. The collider is disabled on death so corpses never stop bullets.
+ * Registers its collider in the HitRegistry; the weapon resolves hits against the soldier's
+ * per-bone volumes (head sphere = headshot), not the padded movement capsule. The collider is
+ * disabled on death so corpses never stop bullets.
  */
 import * as THREE from 'three/webgpu';
 import { RAPIER } from '../physics/world';
 import type RAPIER_NS from '@dimforge/rapier3d-compat';
 import type { Navigation } from './navmesh';
-import type { HitRegistry, Hittable } from '../combat/hittable';
+import type { HitRegistry, Hittable, TraceHit } from '../combat/hittable';
 import type { Tracers } from '../vfx/tracers';
 import type { ParticleFx } from '../vfx/particles';
 import { MuzzleFlash } from '../vfx/muzzleFlash';
 import type { Sfx } from '../audio/audio';
 import { Soldier, type AnimState } from './soldier';
 import type { Archetype } from './archetypes';
+import type { BloodPools } from './bloodPools';
 
 export interface PlayerTarget {
   eye(out: THREE.Vector3): THREE.Vector3;
@@ -148,6 +150,7 @@ export class Enemy implements Hittable {
   private readonly _end = new THREE.Vector3();
   private readonly _chest = new THREE.Vector3();
   private readonly _move = { x: 0, y: 0, z: 0 };
+  private readonly _blood = new THREE.Vector3();
   private readonly ray: RAPIER_NS.Ray;
   private readonly coverRay: RAPIER_NS.Ray; // eye → player's upper torso (aliases _eye/_chest)
 
@@ -156,6 +159,7 @@ export class Enemy implements Hittable {
     private readonly deps: EnemyDeps,
     arch: Archetype,
     private readonly tokens: AttackTokens,
+    private readonly blood: BloodPools,
   ) {
     this.arch = arch;
     this.ray = new RAPIER.Ray(this._eye, this._toPlayer);
@@ -233,10 +237,10 @@ export class Enemy implements Hittable {
   }
 
   // --- Hittable ---
-  headY(): number {
-    return this.pos.y + 0.42;
+  trace(origin: THREE.Vector3, dir: THREE.Vector3, maxT: number, out: TraceHit): boolean {
+    return this.state !== 'dead' && this.character.trace(origin, dir, maxT, out);
   }
-  onHit(damage: number, _point: THREE.Vector3, _headshot: boolean): boolean {
+  onHit(damage: number, _point: THREE.Vector3, headshot: boolean): boolean {
     if (this.state === 'dead') return false;
     this.hp -= damage;
     if (this.hp <= 0) {
@@ -244,7 +248,7 @@ export class Enemy implements Hittable {
       return true;
     }
     // Flinch: visible reaction + their next shot is pushed back.
-    this.character.flinch();
+    this.character.flinch(headshot);
     this.fireTimer = Math.max(this.fireTimer, 0) + FLINCH_DELAY;
     // Getting shot alerts + reveals the player instantly.
     if (this.state === 'patrol') this.toAlert();
@@ -253,6 +257,8 @@ export class Enemy implements Hittable {
   }
 
   private die(): void {
+    this.deps.player.eye(this._pEye);
+    this.character.deathCue(this._pEye.x, this._pEye.z); // falls away from the shooter
     this.state = 'dead';
     this.animState = 'dead';
     this.vel.set(0, 0, 0);
@@ -276,11 +282,11 @@ export class Enemy implements Hittable {
     else this.deps.registry.unregister(this.collider.handle);
   }
 
-  /** Player gunfire heard from `pos`. */
-  hear(pos: THREE.Vector3): void {
+  /** Player noise heard from `pos` (gunfire: HEAR_DIST; footsteps: their own radius). */
+  hear(pos: THREE.Vector3, radius = HEAR_DIST): void {
     if (this.state === 'dead') return;
     const d = this.pos.distanceTo(pos);
-    if (d > HEAR_DIST) return;
+    if (d > radius) return;
     this.lastKnown.copy(pos);
     if (this.state === 'patrol') this.toAlert();
   }
@@ -626,6 +632,7 @@ export class Enemy implements Hittable {
     this.character.play(this.animState);
     this.character.aim(this.state === 'engage' || this.state === 'alert', this.aimPitch);
     this.character.update(dt);
+    if (this.character.bloodCue(this._blood)) this.blood.spawn(this._blood);
 
     this.group.position.set(
       this.prevPos.x + (this.pos.x - this.prevPos.x) * alpha,

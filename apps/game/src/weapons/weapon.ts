@@ -25,7 +25,7 @@ import { RELOAD_SFX, Viewmodel, type ViewmodelState } from './viewmodel';
 import { BrassPool } from './brass';
 import { MuzzleFlash } from '../vfx/muzzleFlash';
 import type { Tracers } from '../vfx/tracers';
-import type { HitRegistry } from '../combat/hittable';
+import type { HitRegistry, TraceHit } from '../combat/hittable';
 import type { Sfx } from '../audio/audio';
 
 const DEG = Math.PI / 180;
@@ -206,6 +206,9 @@ export class RaycastWeapon {
   private readonly _rayOrigin = new THREE.Vector3();
   private readonly _rayDir = new THREE.Vector3(0, 0, -1);
   private readonly ray: RAPIER_NS.Ray;
+  private readonly _trace: TraceHit = { t: 0, head: false };
+  /** Physics-ray filter: pass through registered bodies (they're resolved per bone instead). */
+  private readonly notBody = (c: RAPIER_NS.Collider): boolean => !this.hooks.registry.isBody(c.handle);
   private readonly _hit = new THREE.Vector3();
   private readonly _muzzleWorld = new THREE.Vector3();
   private readonly _normal = new THREE.Vector3();
@@ -414,6 +417,8 @@ export class RaycastWeapon {
       .addScaledVector(this._up, Math.sin(a) * t)
       .normalize();
 
+    // World geometry stops the round; bodies' movement capsules don't (they're padded) — the
+    // nearest precise per-bone body hit in front of the world hit wins instead.
     const hit = this.world.castRayAndGetNormal(
       this.ray,
       MAX_RANGE,
@@ -421,26 +426,28 @@ export class RaycastWeapon {
       undefined,
       undefined,
       this.playerCollider,
+      undefined,
+      this.notBody,
     );
+    const target = this.hooks.registry.trace(this._rayOrigin, this._rayDir, hit ? hit.timeOfImpact : MAX_RANGE, this._trace);
 
     let endPoint: THREE.Vector3;
-    if (hit) {
+    if (target) {
+      this._hit.copy(this._rayOrigin).addScaledVector(this._rayDir, this._trace.t);
+      const headshot = this._trace.head;
+      const dmg = BODY_DAMAGE * (headshot ? HEAD_MULT : 1);
+      const killed = target.onHit(dmg, this._hit, headshot);
+      this.hooks.impactFx(this._hit, this._rayDir, null);
+      this.hooks.sfx.impact(this._hit, true);
+      this.hooks.onHitmarker(headshot, killed);
+      endPoint = this._hit;
+    } else if (hit) {
       const toi = hit.timeOfImpact;
       this._hit.copy(this._rayOrigin).addScaledVector(this._rayDir, toi);
-      const target = this.hooks.registry.get(hit.collider.handle);
-      if (target) {
-        const headshot = this._hit.y >= target.headY();
-        const dmg = BODY_DAMAGE * (headshot ? HEAD_MULT : 1);
-        const killed = target.onHit(dmg, this._hit, headshot);
-        this.hooks.impactFx(this._hit, this._rayDir, null);
-        this.hooks.sfx.impact(this._hit, true);
-        this.hooks.onHitmarker(headshot, killed);
-      } else {
-        this._normal.set(hit.normal.x, hit.normal.y, hit.normal.z);
-        this.decals.spawn(this._hit, this._normal);
-        this.hooks.impactFx(this._hit, this._rayDir, this._normal);
-        this.hooks.sfx.impact(this._hit, false);
-      }
+      this._normal.set(hit.normal.x, hit.normal.y, hit.normal.z);
+      this.decals.spawn(this._hit, this._normal);
+      this.hooks.impactFx(this._hit, this._rayDir, this._normal);
+      this.hooks.sfx.impact(this._hit, false);
       endPoint = this._hit;
     } else {
       endPoint = this._hit.copy(this._rayOrigin).addScaledVector(this._rayDir, MAX_RANGE);

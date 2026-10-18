@@ -6,7 +6,10 @@
  * Coordinates: parts are authored either directly in the body's bind space (T-pose, feet at
  * y = 0, facing +Z, the body's left = +X) or — for the larger assemblies carried over from the
  * rigid soldier — in that older "design" space (facing −Z, slimmer proportions) and fitted onto
- * the body per bone group with a pre-transform (flip + scale + offset).
+ * the body per bone group with a pre-transform (flip + scale + offset) solved from the body's
+ * measured cloth surfaces (`BodyFit`), so armour stands 1–2 cm off the cloth. Straps are flat
+ * webbing laid on the cloth surface and skinned like the cloth under them (`BODY_SKIN`), so they
+ * follow the shoulders instead of floating or sinking as the arms move.
  *
  * Three kits read differently by SILHOUETTE, not just colour:
  *   rifleman — plate carrier, triple mag pouches, radio, low-profile back panel;
@@ -27,7 +30,27 @@ export interface Look {
   kit: Kit;
 }
 
-/** One rigid gear piece: geometry in bind space, bound to `bone`. */
+/** Cloth-surface measurements of the prepared body (bind space) + a surface snap. */
+export interface BodyFit {
+  chestFront: number;
+  chestBack: number;
+  chestSide: number;
+  beltFront: number;
+  beltBack: number;
+  beltSide: number;
+  kneeFront: number;
+  thighOuter: number;
+  elbowBack: number;
+  /** `p` projected onto the cloth surface (tangent plane of the nearest cloth vertex) + `off` out. */
+  snap: (p: THREE.Vector3, off: number, out: THREE.Vector3) => THREE.Vector3;
+  /** Index of the cloth vertex nearest to `p`. */
+  nearest: (p: THREE.Vector3) => number;
+}
+
+/** Pseudo-bone: the part's vertices take the skin weights of the nearest cloth vertex. */
+export const BODY_SKIN = '*body';
+
+/** One gear piece: geometry in bind space, bound rigidly to `bone` (or skinned: `BODY_SKIN`). */
 export interface KitPart {
   bone: string;
   geo: THREE.BufferGeometry;
@@ -46,23 +69,24 @@ export const S_KNIT: Surface = { rough: 0.96, metal: 0, camo: 0, pattern: PAT.kn
 export const S_GLOVE: Surface = { rough: 0.68, metal: 0, camo: 0, pattern: PAT.leather };
 export const S_BOOT: Surface = { rough: 0.62, metal: 0, camo: 0, pattern: PAT.leather };
 const S_SOLE: Surface = { rough: 0.9, metal: 0, camo: 0, pattern: PAT.rubber };
-// Smoked lens: half-mirrored so it picks up the environment probe; neutral, not a coloured glint.
-const S_LENS: Surface = { rough: 0.07, metal: 0.4, camo: 0, pattern: PAT.gloss };
+// Tinted lens: glossy and half-mirrored so it reflects the environment probe.
+const S_LENS: Surface = { rough: 0.05, metal: 0.45, camo: 0, pattern: PAT.gloss };
 const S_VISOR: Surface = { rough: 0.06, metal: 0.28, camo: 0, pattern: PAT.gloss };
-export const S_SKIN: Surface = { rough: 0.5, metal: 0, camo: 0, pattern: PAT.plain };
+export const S_SKIN: Surface = { rough: 0.5, metal: 0, camo: 0, pattern: PAT.skin };
 
 const GEAR = 0x1c1d1e; // black nylon / polymer
 const MAG = 0x26241f;
 export const GLOVE = 0x2f2c27; // dark synthetic shooting gloves
 export const BOOT = 0x463a2e;
+const BOOT_DUST = 0.6; // one dust gradient over the whole boot (same as the trouser hems)
 const SOLE = 0x1a1918;
-const LENS = 0x30343a;
+const LENS = 0x2a2f33;
 const VISOR = 0x1a1d20;
 const TAN = 0x8a7c60;
-/** Knit balaclava per kit — dark olive / coyote / charcoal-olive, never black (albedo ≈ 0.08–0.1). */
-export const KNIT: Record<Kit, number> = { rifleman: 0x55574a, rusher: 0x4c4e40, heavy: 0x494c48 };
-/** The strip of skin left between balaclava and goggles. */
-export const SKIN: Record<Kit, number> = { rifleman: 0xa08a7a, rusher: 0x7d6352, heavy: 0x9a8070 };
+/** Knit balaclava per kit — coyote or charcoal, contrasting the uniform (never black). */
+export const KNIT: Record<Kit, number> = { rifleman: 0x6b5d4a, rusher: 0x3c3d3b, heavy: 0x6b5d4a };
+/** Skin in the balaclava's eye opening (≈ 0.3 / 0.22 / 0.18 linear). */
+export const SKIN: Record<Kit, number> = { rifleman: 0x948276, rusher: 0x8a7462, heavy: 0x948276 };
 
 const _ca = new THREE.Color();
 const _cb = new THREE.Color();
@@ -109,7 +133,7 @@ function fit(sx: number, sy: number, sz: number, ox: number, oy: number, oz: num
 }
 
 // --- The build ------------------------------------------------------------------------------
-export function buildKit(t: Look): KitPart[] {
+export function buildKit(t: Look, body: BodyFit): KitPart[] {
   const dust = new THREE.Color(0x8c7d64);
   const parts: { bone: string; sink: PartSink }[] = [];
   const sink = (bone: string, pre: THREE.Matrix4 | null = null): PartSink => {
@@ -129,6 +153,15 @@ export function buildKit(t: Look): KitPart[] {
   const shells = mixHex(t.helmet, TAN, 0.35); // headset cups match the helmet, not black
   const frame = mixHex(mixHex(t.helmet, TAN, 0.3), GEAR, 0.35); // goggle frame, distinct from the knit
   const camo = camoSurface(t);
+  const _p = V(0, 0, 0);
+  /** Flat webbing (≈44 × 3 mm) along a bind-space path, lying on the cloth surface. */
+  const webbing = (sinkTo: PartSink, pathBind: THREE.Vector3[], color: number, surf: Surface, width = 0.022, lift = 0.004): void => {
+    const curve = new THREE.CatmullRomCurve3(pathBind, false, 'centripetal');
+    const pts: THREE.Vector3[] = [];
+    for (let i = 0; i <= 14; i++) pts.push(body.snap(curve.getPointAt(i / 14, _p), lift, V(0, 0, 0)));
+    // Side direction = across the strap, roughly perpendicular to path and surface normal.
+    sinkTo.add(sweep(pts, width, 0.0016, V(1, 0, 0), 20, 4), null, color, surf);
+  };
 
   // ===================================================================== LEGS (bind space)
   for (const side of [1, -1] as const) {
@@ -136,13 +169,14 @@ export function buildKit(t: Look): KitPart[] {
     const sx = (x: number): number => x * side;
     // Cargo pocket + flap on the outer thigh.
     const thigh = sink(L ? 'thigh_l' : 'thigh_r');
-    thigh.add(rbox(0.028, 0.16, 0.13, 0.011, 1), trs(sx(0.222), 0.72, -0.04, 0, 0, sx(-0.06)), uni, camo, 0.6);
-    thigh.add(rbox(0.032, 0.036, 0.138, 0.009, 1), trs(sx(0.226), 0.798, -0.04, 0, 0, sx(-0.06)), uni, camo, 0.6);
+    const px = body.thighOuter + 0.01;
+    thigh.add(rbox(0.026, 0.16, 0.13, 0.011, 1), trs(sx(px), 0.72, -0.04, 0, 0, sx(-0.06)), uni, camo, 0.6);
+    thigh.add(rbox(0.03, 0.036, 0.138, 0.009, 1), trs(sx(px + 0.004), 0.798, -0.04, 0, 0, sx(-0.06)), uni, camo, 0.6);
 
     const calf = sink(L ? 'calf_l' : 'calf_r');
     if (!rusher) {
       // Knee pad on the front of the knee and its strap round the calf.
-      pad(calf, facing(V(sx(0.118), 0.528, 0.062), V(0, 0.1, 1).normalize(), V(0, 1, 0)), 0.11, 0.13, vest);
+      pad(calf, facing(V(sx(0.118), 0.528, body.kneeFront + 0.016), V(0, 0.1, 1).normalize(), V(0, 1, 0)), 0.11, 0.13, vest);
       calf.add(
         loft(
           [
@@ -183,26 +217,27 @@ export function buildKit(t: Look): KitPart[] {
     const bootFit = fit(1, 1, 1, sx(0.017), 0, -0.05);
     const ds = (x: number): number => -x * side; // design-space x for this side (pre-flip)
     const shaft: Section[] = [
-      { y: 0.05, rx: 0.048, rz: 0.062, x: ds(0.102), z: 0.022 },
-      { y: 0.12, rx: 0.052, rz: 0.061, x: ds(0.102), z: 0.02 },
-      { y: 0.2, rx: 0.056, rz: 0.062, x: ds(0.102), z: 0.018 },
-      { y: 0.232, rx: 0.06, rz: 0.066, x: ds(0.102), z: 0.018 },
-      { y: 0.248, rx: 0.055, rz: 0.059, x: ds(0.102), z: 0.018 },
+      { y: 0.05, rx: 0.046, rz: 0.06, x: ds(0.102), z: 0.022 },
+      { y: 0.11, rx: 0.041, rz: 0.05, x: ds(0.102), z: 0.02 },
+      { y: 0.16, rx: 0.045, rz: 0.053, x: ds(0.102), z: 0.018 },
+      { y: 0.21, rx: 0.05, rz: 0.057, x: ds(0.102), z: 0.018 },
+      { y: 0.235, rx: 0.052, rz: 0.058, x: ds(0.102), z: 0.018 },
+      { y: 0.248, rx: 0.048, rz: 0.054, x: ds(0.102), z: 0.018 },
     ];
-    sink(L ? 'calf_l' : 'calf_r', bootFit).add(loft(shaft, 12), null, BOOT, S_BOOT, 0.07);
+    sink(L ? 'calf_l' : 'calf_r', bootFit).add(loft(shaft, 12), null, BOOT, S_BOOT, BOOT_DUST);
     const foot = sink(L ? 'foot_l' : 'foot_r', bootFit);
     const footSecs: Section[] = [
       { y: -0.088, rx: 0.03, rz: 0.034, z: 0.062, n: 2.4 },
       { y: -0.075, rx: 0.04, rz: 0.054, z: 0.07, n: 2.4 },
       { y: -0.03, rx: 0.044, rz: 0.062, z: 0.076, n: 2.4 },
       { y: 0.03, rx: 0.046, rz: 0.057, z: 0.071, n: 2.5 },
-      { y: 0.085, rx: 0.047, rz: 0.045, z: 0.061, n: 2.5 },
-      { y: 0.135, rx: 0.046, rz: 0.037, z: 0.052, n: 2.4 },
-      { y: 0.175, rx: 0.041, rz: 0.031, z: 0.048, n: 2.2 },
-      { y: 0.2, rx: 0.031, rz: 0.025, z: 0.046, n: 2.1 },
-      { y: 0.213, rx: 0.017, rz: 0.016, z: 0.046, n: 2 },
+      { y: 0.085, rx: 0.045, rz: 0.04, z: 0.056, n: 2.4 },
+      { y: 0.135, rx: 0.043, rz: 0.03, z: 0.046, n: 2.3 },
+      { y: 0.175, rx: 0.038, rz: 0.025, z: 0.041, n: 2.1 },
+      { y: 0.2, rx: 0.029, rz: 0.02, z: 0.039, n: 2 },
+      { y: 0.213, rx: 0.016, rz: 0.013, z: 0.039, n: 2 },
     ];
-    foot.add(loft(footSecs, 12), trs(ds(0.102), 0, 0.02, -Math.PI / 2), BOOT, S_BOOT, 0.07);
+    foot.add(loft(footSecs, 12), trs(ds(0.102), 0, 0.02, -Math.PI / 2), BOOT, S_BOOT, BOOT_DUST);
     const soleSecs: Section[] = [
       { y: -0.094, rx: 0.028, rz: 0.01, z: 0.015, n: 3.2 },
       { y: -0.086, rx: 0.038, rz: 0.016, z: 0.016, n: 3.6 },
@@ -215,12 +250,15 @@ export function buildKit(t: Look): KitPart[] {
       { y: 0.22, rx: 0.015, rz: 0.006, z: 0.026, n: 2.4 },
     ];
     foot.add(loft(soleSecs, 14), trs(ds(0.102), 0, 0.02, -Math.PI / 2), SOLE, S_SOLE);
-    foot.add(curveZ(rbox(0.078, 0.046, 0.026, 0.01, 1), -3.4), trs(ds(0.102), 0.062, 0.098, 0.12), mixHex(BOOT, GEAR, 0.2), S_BOOT);
-    foot.add(rbox(0.03, 0.01, 0.1, 0.004, 1), trs(ds(0.102), 0.114, -0.05, -0.4), mixHex(BOOT, GEAR, 0.45), S_FABRIC);
+    foot.add(curveZ(rbox(0.078, 0.046, 0.026, 0.01, 1), -3.4), trs(ds(0.102), 0.062, 0.098, 0.12), mixHex(BOOT, GEAR, 0.2), S_BOOT, BOOT_DUST);
+    // Laced tongue: a low panel of the same leather (the woven surface reads as laces close up).
+    foot.add(rbox(0.032, 0.006, 0.09, 0.003, 1), trs(ds(0.102), 0.112, -0.048, -0.4), mixHex(BOOT, GEAR, 0.12), S_FABRIC, BOOT_DUST);
   }
 
   // ===================================================================== PELVIS (design space)
-  const hips = sink('pelvis', fit(1.06, 1, 1.06, 0, 0, -0.008));
+  const beltA = (body.beltFront - body.beltBack + 0.012) / 0.262;
+  const beltC = body.beltFront + 0.006 - 0.127 * beltA;
+  const hips = sink('pelvis', fit((body.beltSide + 0.006) / 0.17, 1, beltA, 0, 0, beltC));
   hips.add(
     loft(
       [
@@ -250,9 +288,27 @@ export function buildKit(t: Look): KitPart[] {
   if (heavy) hips.add(curveZ(rbox(0.15, 0.13, 0.024, 0.012, 1), 1.6), trs(0, 0.9, -0.112, 0.1), vest, S_CORDURA);
 
   // ===================================================================== CHEST (design space)
-  const chest = sink('spine_03', fit(1, 1, 1.2, 0, 0.03, -0.012));
+  // Solve the chest pre-transform so the armour's inner faces sit 1–2 cm off the cloth:
+  // design z → bind z = −a·z + c (flip), design x → −sx·x.
+  const pd = heavy ? 0.062 : 0.046; // plate bag thickness
+  const pz = heavy ? 0.163 : 0.152;
+  const zF = rusher ? -0.115 : -(pz - pd / 2); // design z of the front inner face
+  const zB = rusher ? 0.115 : pz - 0.008 - pd / 2; // design z of the back inner face
+  const gap = 0.014;
+  const chA = (body.chestFront - body.chestBack + 2 * gap) / (zB - zF);
+  const chC = body.chestFront + gap + chA * zF;
+  const cr = heavy ? 0.205 : 0.196;
+  const chSx = (body.chestSide + gap) / (rusher ? 0.16 : cr - 0.01);
+  const chestFit = fit(chSx, 1, chA, 0, 0.03, chC);
+  const chest = sink('spine_03', chestFit); // cummerbund + side pouches: wraps the measured girth
+  // Plates + front pouches keep their design depth; each face sits `gap` off the cloth.
+  const front = sink('spine_03', fit(1.05, 1, 1, 0, 0.03, body.chestFront + gap + zF));
+  const back = sink('spine_03', fit(1.05, 1, 1, 0, 0.03, body.chestBack - gap + zB));
+  const neck = sink('spine_03', fit(1, 1, 1.2, 0, 0.03, -0.012)); // collar / neck guard
+  const straps = sink(BODY_SKIN); // bind space: webbing laid on the cloth, skinned with it
+  const toBind = (x: number, y: number, z: number): THREE.Vector3 => V(x, y, z).applyMatrix4(chestFit);
   // Shirt collar standing round the neck.
-  chest.add(
+  neck.add(
     loft(
       [
         { y: 1.47, rx: 0.104, rz: 0.088, z: 0.0 },
@@ -269,19 +325,28 @@ export function buildKit(t: Look): KitPart[] {
     camo,
   );
   const strapPath = (s: number): THREE.Vector3[] => [
-    V(s * 0.095, 1.44, -0.135),
-    V(s * 0.108, 1.515, -0.086),
-    V(s * 0.116, 1.55, -0.02),
-    V(s * 0.11, 1.535, 0.05),
-    V(s * 0.1, 1.48, 0.122),
+    toBind(s * 0.095, 1.44, -0.15),
+    toBind(s * 0.104, 1.5, -0.1),
+    toBind(s * 0.11, 1.545, -0.02),
+    toBind(s * 0.106, 1.52, 0.06),
+    toBind(s * 0.1, 1.47, 0.13),
+  ];
+  // X-harness of the light chest rig: up from the mag panel, over the shoulder, across the back.
+  const harnessPath = (s: number): THREE.Vector3[] => [
+    toBind(s * 0.1, 1.27, -0.14),
+    toBind(s * 0.11, 1.46, -0.1),
+    toBind(s * 0.112, 1.545, -0.012),
+    toBind(s * 0.095, 1.47, 0.12),
+    toBind(0, 1.3, 0.14),
+    toBind(-s * 0.1, 1.14, 0.125),
   ];
   if (rusher) {
     // Light chest rig: a mag panel on an X-harness + waist strap. No plates, no back panel.
-    chest.add(curveZ(rbox(0.29, 0.15, 0.03, 0.01, 1), 0.9), trs(0, 1.2, -0.13, 0.05), vest, S_CORDURA);
+    front.add(curveZ(rbox(0.29, 0.15, 0.03, 0.01, 1), 0.9), trs(0, 1.2, -0.13, 0.05), vest, S_CORDURA);
     for (const x of [-0.105, -0.035, 0.035, 0.105]) {
       const zf = -0.145 + 0.9 * x * x;
-      chest.add(rbox(0.062, 0.105, 0.03, 0.008, 1), trs(x, 1.2, zf - 0.015, 0.05), vestWarm, S_FABRIC);
-      chest.add(rbox(0.056, 0.06, 0.024, 0.006, 1), trs(x, 1.27, zf - 0.017, 0.12), MAG, S_POLY);
+      front.add(rbox(0.062, 0.105, 0.03, 0.008, 1), trs(x, 1.2, zf - 0.015, 0.05), vestWarm, S_FABRIC);
+      front.add(rbox(0.056, 0.06, 0.024, 0.006, 1), trs(x, 1.27, zf - 0.017, 0.12), MAG, S_POLY);
     }
     chest.add(
       loft(
@@ -299,27 +364,15 @@ export function buildKit(t: Look): KitPart[] {
       vestDark,
       S_FABRIC,
     );
-    for (const s of [-1, 1]) {
-      const strap = [
-        V(s * 0.1, 1.27, -0.128),
-        V(s * 0.11, 1.46, -0.095),
-        V(s * 0.116, 1.545, -0.012),
-        V(s * 0.1, 1.49, 0.11),
-        V(0, 1.3, 0.13),
-        V(-s * 0.1, 1.135, 0.122),
-      ];
-      chest.add(sweep(strap, 0.024, 0.006, V(1, 0, 0), 16, 4), null, vestDark, S_CORDURA);
-    }
+    for (const s of [-1, 1]) webbing(straps, harnessPath(s), vestDark, S_FABRIC, 0.02);
     chest.add(rbox(0.04, 0.12, 0.066, 0.009, 1), trs(-0.185, 1.21, 0.0, 0, 0, 0.06), vestDark, S_FABRIC);
     chest.add(rbox(0.036, 0.04, 0.056, 0.007, 1), trs(-0.188, 1.29, 0.0, 0, 0, 0.06), GEAR, S_POLY);
   } else {
     // Plate carrier: front + back plate bags (curved), cummerbund round the sides.
     const pw = heavy ? 0.33 : 0.3;
-    const pd = heavy ? 0.078 : 0.056;
-    const pz = heavy ? 0.163 : 0.152;
-    chest.add(curveZ(rbox(pw, heavy ? 0.36 : 0.335, pd, 0.018, 2), 0.6), trs(0, 1.285, -pz, 0.07), vest, S_CORDURA);
-    chest.add(curveZ(rbox(pw + 0.005, heavy ? 0.37 : 0.35, pd, 0.018, 2), -0.6), trs(0, 1.3, pz - 0.008, -0.05), vest, S_CORDURA);
-    const cr = heavy ? 0.205 : 0.196;
+    const plate = heavy ? mixHex(vest, 0x5a5e60, 0.25) : vest; // heavy plates read a step lighter
+    front.add(curveZ(rbox(pw, heavy ? 0.36 : 0.335, pd, 0.018, 2), 0.6), trs(0, 1.285, -pz, 0.07), plate, S_CORDURA);
+    back.add(curveZ(rbox(pw + 0.005, heavy ? 0.37 : 0.35, pd, 0.018, 2), -0.6), trs(0, 1.3, pz - 0.008, -0.05), plate, S_CORDURA);
     chest.add(
       loft(
         [
@@ -338,19 +391,19 @@ export function buildKit(t: Look): KitPart[] {
     );
     for (const s of [-1, 1]) {
       const strap = strapPath(s);
-      chest.add(sweep(strap, 0.031, 0.009, V(1, 0, 0), 12), null, vest, S_CORDURA);
-      chest.add(sweep(strap.slice(1, 4), 0.034, 0.015, V(1, 0, 0), 6), null, vestLite, S_FABRIC);
+      webbing(straps, strap, vest, S_FABRIC, 0.024);
+      webbing(straps, strap.slice(1, 4), vestLite, S_FABRIC, 0.027, 0.008); // shoulder pad
     }
     // Triple open-top mag pouches with the magazines showing.
     const fz = -(pz + pd / 2) + 0.001;
     for (const x of [-0.083, 0, 0.083]) {
       const zf = fz + 0.6 * x * x;
-      chest.add(curveZ(rbox(0.077, 0.112, 0.037, 0.009, 1), 0.6), trs(x, 1.195, zf - 0.017, 0.07), vestWarm, S_FABRIC);
-      chest.add(rbox(0.066, 0.07, 0.026, 0.006, 1), trs(x, 1.272, zf - 0.02, 0.16), MAG, S_POLY);
+      front.add(curveZ(rbox(0.077, 0.112, 0.037, 0.009, 1), 0.6), trs(x, 1.195, zf - 0.017, 0.07), vestWarm, S_FABRIC);
+      front.add(rbox(0.066, 0.07, 0.026, 0.006, 1), trs(x, 1.272, zf - 0.02, 0.16), MAG, S_POLY);
     }
     // Admin pouch + blank hook-and-loop patch (no insignia).
-    chest.add(curveZ(rbox(0.2, 0.086, 0.026, 0.009, 1), 0.6), trs(0, 1.358, fz - 0.012, 0.07), vestWarm, S_FABRIC);
-    chest.add(rbox(0.09, 0.05, 0.004, 0.002, 1), trs(-0.03, 1.36, fz - 0.027, 0.07), vestLite, S_FABRIC);
+    front.add(curveZ(rbox(0.2, 0.086, 0.026, 0.009, 1), 0.6), trs(0, 1.358, fz - 0.012, 0.07), vestWarm, S_FABRIC);
+    front.add(rbox(0.09, 0.05, 0.004, 0.002, 1), trs(-0.03, 1.36, fz - 0.027, 0.07), vestLite, S_FABRIC);
     // Radio pouch + radio on the left cummerbund, utility pouch on the right.
     chest.add(rbox(0.046, 0.15, 0.078, 0.01, 1), trs(-(cr + 0.026), 1.2, 0.035, 0, 0, 0.04), vestDark, S_FABRIC);
     chest.add(rbox(0.04, 0.05, 0.066, 0.008, 1), trs(-(cr + 0.028), 1.296, 0.035, 0, 0, 0.04), GEAR, S_POLY);
@@ -375,19 +428,30 @@ export function buildKit(t: Look): KitPart[] {
         if (y > 1.46) p.setY(i, y - 0.055 * smooth(0.0, -0.09, p.getZ(i)));
       }
       g.computeVertexNormals();
-      chest.add(g, null, vest, S_CORDURA);
+      neck.add(g, null, vest, S_CORDURA);
     } else {
       // Low-profile assault pack on the back panel + drag handle.
-      chest.add(curveZ(rbox(0.25, 0.3, 0.06, 0.022, 1), -0.8), trs(0, 1.29, pz + 0.048), mixHex(vest, uni, 0.3), S_CORDURA);
-      chest.add(sweep([V(-0.045, 1.465, pz + 0.013), V(0, 1.5, pz + 0.018), V(0.045, 1.465, pz + 0.013)], 0.012, 0.006, V(0, 0, 1), 6), null, GEAR, S_FABRIC);
+      back.add(curveZ(rbox(0.25, 0.3, 0.06, 0.022, 1), -0.8), trs(0, 1.29, pz + 0.048), mixHex(vest, uni, 0.3), S_CORDURA);
+      back.add(sweep([V(-0.045, 1.465, pz + 0.013), V(0, 1.5, pz + 0.018), V(0.045, 1.465, pz + 0.013)], 0.012, 0.006, V(0, 0, 1), 6), null, GEAR, S_FABRIC);
     }
   }
   // Whip antenna + PTT cable from the radio (all kits carry a radio on the left).
   const rx = rusher ? -0.188 : -(heavy ? 0.233 : 0.224);
   const rz = rusher ? 0.0 : 0.035;
   chest.add(new THREE.CylinderGeometry(0.008, 0.008, 0.03, 6), trs(rx - 0.002, 1.325, rz + 0.015), GEAR, S_POLY);
-  chest.add(sweep([V(rx - 0.002, 1.335, rz + 0.015), V(rx - 0.008, 1.45, rz + 0.045), V(rx + 0.01, 1.57, rz + 0.077), V(rx + 0.024, 1.7, rz + 0.09)], 0.0045, 0.0045, V(1, 0, 0), 8, 4), null, GEAR, S_POLY);
-  chest.add(sweep([V(rx + 0.02, 1.27, rz - 0.035), V(-0.17, 1.34, -0.09), V(-0.12, 1.42, -0.14), V(-0.1, 1.44, -0.15)], 0.004, 0.004, V(0, 1, 0), 6, 4), null, GEAR, S_POLY);
+  chest.add(new THREE.CylinderGeometry(0.0035, 0.005, 0.25, 5), trs(rx - 0.002, 1.335 + 0.125, rz + 0.02, -0.08), GEAR, S_POLY);
+  {
+    // PTT cable: from the radio forward, then up along the left shoulder strap, lying on the cloth.
+    const radio = toBind(rx + 0.02, 1.27, rz - 0.035);
+    const strap = rusher ? harnessPath(-1) : strapPath(-1);
+    const curve = new THREE.CatmullRomCurve3([radio, body.snap(strap[0], 0.012, V(0, 0, 0)), body.snap(strap[1], 0.012, V(0, 0, 0))], false, 'centripetal');
+    const pts: THREE.Vector3[] = [];
+    for (let i = 0; i <= 8; i++) {
+      const c = curve.getPointAt(i / 8, V(0, 0, 0));
+      pts.push(i < 2 ? c : body.snap(c, 0.01, c));
+    }
+    straps.add(sweep(pts, 0.0035, 0.0035, V(1, 0, 0), 10, 4), null, GEAR, S_POLY);
+  }
 
   // ===================================================================== ARMS (bind space)
   // T-pose: arms along ±X at y ≈ 1.45, palms down, elbow points back (−Z).
@@ -397,7 +461,7 @@ export function buildKit(t: Look): KitPart[] {
     const upper = sink(L ? 'upperarm_l' : 'upperarm_r');
     const lower = sink(L ? 'lowerarm_l' : 'lowerarm_r');
     // Elbow pad on the point of the elbow.
-    pad(lower, facing(V(sx(0.47), 1.44, -0.165), V(0, 0, -1), V(1, 0, 0)), 0.075, 0.09, vest);
+    pad(lower, facing(V(sx(0.47), 1.44, body.elbowBack - 0.016), V(0, 0, -1), V(1, 0, 0)), 0.075, 0.09, vest);
     // Blank hook-and-loop patch on the outside of the upper sleeve.
     upper.add(rbox(0.07, 0.006, 0.06, 0.003, 1), trs(sx(0.33), 1.516, -0.07), mixHex(vest, TAN, 0.18), S_FABRIC);
     // Glove gauntlet over the cuff.
@@ -413,6 +477,19 @@ export function buildKit(t: Look): KitPart[] {
       false,
     );
     lower.add(cuff, alongMatrix(V(sx(0.652), 1.448, -0.072), V(sx(0.75), 1.448, -0.072)), GLOVE, S_GLOVE);
+    // Sleeve cuff: a turned band of the shirt just above the glove.
+    const sleeve = loft(
+      [
+        { y: 0, rx: 0.05, rz: 0.048 },
+        { y: 0.008, rx: 0.058, rz: 0.055, rip: 0.05, ripK: 5 },
+        { y: 0.036, rx: 0.057, rz: 0.054 },
+        { y: 0.042, rx: 0.05, rz: 0.048 },
+      ],
+      12,
+      false,
+      false,
+    );
+    lower.add(sleeve, alongMatrix(V(sx(0.6), 1.448, -0.072), V(sx(0.7), 1.448, -0.072)), new THREE.Color(uni).multiplyScalar(1.05).getHex(), { ...camo, camo: camo.camo * 1.08 });
     if (heavy) {
       // Shoulder armour draped over the deltoid.
       upper.add(curveZ(rbox(0.12, 0.1, 0.022, 0.01, 1), 6), facing(V(sx(0.255), 1.54, -0.07), V(sx(0.55), 0.84, 0).normalize(), V(0, 0, 1)), vest, S_CORDURA);
@@ -420,7 +497,18 @@ export function buildKit(t: Look): KitPart[] {
   }
 
   // ===================================================================== HEAD (design space)
-  const head = sink('Head', fit(1.15, 1, 1.05, 0, 1.695 - 1.665, -0.004 + 0.014, V(0, 1.665, -0.014)));
+  const headFit = fit(1.15, 1, 1.05, 0, 1.695 - 1.665, -0.004 + 0.014, V(0, 1.665, -0.014));
+  const head = sink('Head', headFit);
+  // Helmet group: shell 8% smaller, seated 1.5 cm lower (design space, about the shell centre).
+  const hc = V(0, 1.705, 0.002);
+  const helm = sink(
+    'Head',
+    headFit
+      .clone()
+      .multiply(new THREE.Matrix4().makeTranslation(hc.x, hc.y - 0.015, hc.z))
+      .multiply(new THREE.Matrix4().makeScale(0.92, 0.92, 0.92))
+      .multiply(new THREE.Matrix4().makeTranslation(-hc.x, -hc.y, -hc.z)),
+  );
   // Neck gaiter pulled up over nose and mouth to the eyewear; drops lower at the nape.
   {
     const g = loft(
@@ -459,25 +547,27 @@ export function buildKit(t: Look): KitPart[] {
     // Smoked ballistic visor hinged on the helmet, covering the whole face.
     head.add(sweep(arc(0.104, 0.122, 1.635, -1.32, 1.32, 8), 0.08, 0.004, V(0, 1, 0), 12, 6), null, VISOR, S_VISOR);
     head.add(sweep(arc(0.106, 0.124, 1.713, -1.32, 1.32, 8), 0.007, 0.006, V(0, 1, 0), 12, 4), null, GEAR, S_POLY);
-  } else {
-    // Ballistic goggles: visible polymer frame, smoked half-mirror lens, strap round the back.
-    head.add(sweep(arc(0.086, 0.101, 1.678, -1.38, 1.38, 8), 0.029, 0.012, V(0, 1, 0), 12, 8), null, frame, S_POLY);
-    head.add(sweep(arc(0.088, 0.109, 1.679, -1.12, 1.12, 6), 0.022, 0.004, V(0, 1, 0), 10, 6), null, LENS, S_LENS);
-    head.add(sweep(arc(0.088, 0.104, 1.685, 1.3, Math.PI * 2 - 1.3, 8), 0.012, 0.003, V(0, 1, 0), 8, 4), null, mixHex(frame, GEAR, 0.5), S_FABRIC);
+  } else if (rusher) {
+    // Thin ballistic glasses: 8 mm frame bar, tinted wrap lens, temple arms.
+    head.add(sweep(arc(0.087, 0.106, 1.693, -1.2, 1.2, 8), 0.004, 0.004, V(0, 1, 0), 12, 4), null, GEAR, S_POLY);
+    head.add(sweep(arc(0.088, 0.108, 1.677, -1.1, 1.1, 6), 0.015, 0.0025, V(0, 1, 0), 10, 6), null, LENS, S_LENS);
+    for (const sgn of [1, -1]) {
+      head.add(sweep(arc(0.087, 0.104, 1.693, sgn * 1.2, sgn * 1.75, 3), 0.003, 0.002, V(0, 1, 0), 4, 4), null, GEAR, S_POLY);
+    }
   }
-  // Helmet: high-cut shell with brow, ear cut-outs and a deeper nape.
-  const hc = V(0, 1.705, 0.002);
+  // Helmet: high-cut shell with brow, deep ear cut-outs (headset cups inside) and nape.
   const HAX = 0.123;
   const HAY = 0.12;
   const HAZ = 0.138;
   const rim = (phi: number): number => {
     const d = phi <= Math.PI ? phi : Math.PI * 2 - phi; // angular distance from the front
-    return 1.724 + 0.026 * bumpA(d, Math.PI * 0.5, Math.PI * 0.27) - 0.012 * bumpA(d, Math.PI * 0.24, Math.PI * 0.12) - 0.06 * smooth(Math.PI * 0.62, Math.PI * 0.95, d);
+    return 1.724 + 0.042 * bumpA(d, Math.PI * 0.5, Math.PI * 0.27) - 0.012 * bumpA(d, Math.PI * 0.24, Math.PI * 0.12) - 0.06 * smooth(Math.PI * 0.62, Math.PI * 0.95, d);
   };
-  head.add(helmetShell(hc, HAX, HAY, HAZ, rim, 28, 10), null, t.helmet, S_HELMET);
+  const FLARE = 0.018; // brim overhang (was 0.045: −60%)
+  helm.add(helmetShell(hc, HAX, HAY, HAZ, rim, 28, 10, FLARE), null, t.helmet, S_HELMET);
   const onShell = (phi: number, y: number, out = 1.0): THREE.Vector3 => {
     const th = Math.acos(THREE.MathUtils.clamp((y - hc.y) / HAY, -0.99, 0.99));
-    const fl = 1 + 0.045 * Math.pow(th / Math.acos(THREE.MathUtils.clamp((rim(phi) - hc.y) / HAY, -0.6, 0.98)), 3);
+    const fl = 1 + FLARE * Math.pow(th / Math.acos(THREE.MathUtils.clamp((rim(phi) - hc.y) / HAY, -0.6, 0.98)), 3);
     return V(hc.x + HAX * Math.sin(th) * Math.sin(phi) * out * fl, y, hc.z - HAZ * Math.sin(th) * Math.cos(phi) * out * fl);
   };
   for (const s of [1, -1]) {
@@ -487,17 +577,28 @@ export function buildKit(t: Look): KitPart[] {
       const phi = s > 0 ? d : Math.PI * 2 - d;
       pts.push(onShell(phi, rim(phi) + 0.022, 1.02));
     }
-    head.add(sweep(pts, 0.012, 0.006, V(0, 1, 0), 8), null, GEAR, S_POLY);
+    helm.add(sweep(pts, 0.012, 0.006, V(0, 1, 0), 8), null, GEAR, S_POLY);
   }
   if (!rusher) {
     // NVG shroud + folded mount at the brow, counterweight pouch at the nape, IR strobe on top.
     const f = onShell(0, 1.752, 1.0);
-    head.add(rbox(0.062, 0.044, 0.014, 0.005, 1), trs(f.x, f.y, f.z - 0.006, 0.4), GEAR, S_METAL);
-    head.add(rbox(0.036, 0.03, 0.034, 0.006, 1), trs(f.x, f.y - 0.022, f.z - 0.018, 0.2), GEAR, S_METAL);
+    helm.add(rbox(0.062, 0.044, 0.014, 0.005, 1), trs(f.x, f.y, f.z - 0.006, 0.4), GEAR, S_METAL);
+    helm.add(rbox(0.036, 0.03, 0.034, 0.006, 1), trs(f.x, f.y - 0.022, f.z - 0.018, 0.2), GEAR, S_METAL);
     const b = onShell(Math.PI, 1.705, 1.0);
-    head.add(curveZ(rbox(0.1, 0.06, 0.034, 0.012, 1), -1.6), trs(b.x, b.y, b.z + 0.014, -0.15), mixHex(t.helmet, GEAR, 0.4), S_FABRIC);
+    helm.add(curveZ(rbox(0.1, 0.06, 0.034, 0.012, 1), -1.6), trs(b.x, b.y, b.z + 0.014, -0.15), mixHex(t.helmet, GEAR, 0.4), S_FABRIC);
     const top = onShell(Math.PI, 1.815, 1.0);
-    head.add(rbox(0.026, 0.016, 0.03, 0.005, 1), trs(top.x, top.y + 0.004, top.z, -0.5), GEAR, S_POLY);
+    helm.add(rbox(0.026, 0.016, 0.03, 0.005, 1), trs(top.x, top.y + 0.004, top.z, -0.5), GEAR, S_POLY);
+  }
+  if (kit === 'rifleman') {
+    // Goggles pushed up onto the helmet front: frame + tinted lens, strap round the shell.
+    const y = 1.775;
+    const th = Math.acos((y - hc.y) / HAY);
+    const gx = HAX * Math.sin(th) + 0.011;
+    const gz = HAZ * Math.sin(th) + 0.011;
+    const ga = (a0: number, a1: number, n: number, grow: number): THREE.Vector3[] => arc(gx + grow, gz + grow, y, a0, a1, n, hc.z);
+    helm.add(sweep(ga(-1.15, 1.15, 8, 0), 0.02, 0.009, V(0, 1, 0), 12, 8), null, frame, S_POLY);
+    helm.add(sweep(ga(-0.95, 0.95, 6, 0.008), 0.015, 0.003, V(0, 1, 0), 10, 6), null, LENS, S_LENS);
+    helm.add(sweep(ga(1.1, Math.PI * 2 - 1.1, 10, -0.004), 0.011, 0.003, V(0, 1, 0), 12, 4), null, mixHex(frame, GEAR, 0.5), S_FABRIC);
   }
   // Electronic ear protection on rail arms.
   for (const s of [1, -1]) {
@@ -512,7 +613,7 @@ export function buildKit(t: Look): KitPart[] {
       14,
     );
     head.add(cup, trs(s * 0.083, 1.655, 0.006, 0, 0, -s * Math.PI * 0.5), shells, S_POLY);
-    head.add(rbox(0.012, 0.045, 0.022, 0.004, 1), trs(s * 0.118, 1.705, 0.008, 0, 0, s * 0.18), GEAR, S_POLY);
+    head.add(rbox(0.012, 0.04, 0.022, 0.004, 1), trs(s * 0.114, 1.7, 0.008, 0, 0, s * 0.18), GEAR, S_POLY);
   }
   head.add(
     sweep(

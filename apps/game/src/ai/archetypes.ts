@@ -51,7 +51,8 @@ export const RUSHER: Archetype = {
 
 export const HEAVY: Archetype = {
   name: 'Heavy',
-  soldier: { uniform: 0x33383a, vest: 0x141518, helmet: 0x1e2224, scale: 1.14, kit: 'heavy' },
+  // Lifted from near-black so the Heavy still reads in shade (uniform albedo ≈ 0.08 linear).
+  soldier: { uniform: 0x4b5153, vest: 0x2a2e30, helmet: 0x2a2e30, scale: 1.14, kit: 'heavy' },
   maxHp: 210,
   patrolSpeed: 1.8,
   engageSpeed: 3.0, // slow

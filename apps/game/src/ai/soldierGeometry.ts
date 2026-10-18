@@ -190,8 +190,9 @@ export function helmetShell(
   ay: number,
   az: number,
   rimY: (phi: number) => number,
-  radial = 36,
-  rows = 11,
+  radial: number,
+  rows: number,
+  flare: number,
 ): THREE.BufferGeometry {
   const pos: number[] = [];
   const idx: number[] = [];
@@ -205,8 +206,7 @@ export function helmetShell(
       const phi = (j / radial) * Math.PI * 2;
       const cosMax = THREE.MathUtils.clamp((rimY(phi) - c.y) / ay, -0.6, 0.98);
       const th = Math.acos(cosMax) * Math.max(f, 0.02);
-      const flare = 1 + 0.045 * f * f * f; // the edge stands slightly proud of the head
-      const r = Math.sin(th) * sc * flare;
+      const r = Math.sin(th) * sc * (1 + flare * f * f * f); // the edge stands slightly proud
       pos.push(c.x + ax * r * Math.sin(phi), c.y + ay * Math.cos(th) * sc - drop, c.z - az * r * Math.cos(phi));
     }
   }

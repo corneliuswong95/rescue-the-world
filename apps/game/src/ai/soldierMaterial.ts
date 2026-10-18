@@ -48,6 +48,7 @@ export const PAT = {
   rubber: 4,
   gloss: 5,
   leather: 6,
+  skin: 7,
 } as const;
 
 export type PatternId = (typeof PAT)[keyof typeof PAT];
@@ -85,12 +86,14 @@ function buildMaterial(): THREE.MeshStandardNodeMaterial {
   const mRub = is(pat, PAT.rubber);
   const mGloss = is(pat, PAT.gloss);
   const mLea = is(pat, PAT.leather);
+  const mSkin = is(pat, PAT.skin);
   const mPlain = float(1).sub(mFab).sub(mCor).sub(mKnit).sub(mRub).sub(mGloss).sub(mLea);
 
   // Pixel footprint in metres (segment space) — drives micro-detail fade-out.
   const fw = fwidth(p);
   const foot = max(max(fw.x, fw.y), fw.z);
   const fadeFine = float(1).sub(smoothstep(0.0012, 0.0026, foot)); // < ~1.5 m
+  const fadeWeave = float(1).sub(smoothstep(0.0005, 0.0011, foot)); // < ~0.7 m
   const fadeMid = float(1).sub(smoothstep(0.004, 0.009, foot)); // < ~6 m
 
   // --- Camouflage (original blotch pattern) ---------------------------------------------
@@ -109,13 +112,13 @@ function buildMaterial(): THREE.MeshStandardNodeMaterial {
   const mBlack = aaStep(0.3, nC);
   const mSpeck = aaStep(0.55, nD).mul(0.6);
   const cMid = albedo;
-  const cDark = albedo.mul(vec3(0.5, 0.48, 0.42));
+  const cDark = albedo.mul(vec3(0.6, 0.57, 0.5));
   // Light blotches lift dark bases a lot but light (coyote) bases only a little — otherwise a
   // tan uniform turns into cream-spotted pyjamas.
   const lum = albedo.dot(vec3(0.3, 0.6, 0.1));
   const lift = float(1).sub(smoothstep(0.06, 0.2, lum).mul(0.65));
   const cLight = mix(albedo, mix(albedo.mul(1.4), vec3(0.2, 0.175, 0.12), 0.3), lift);
-  const cBlack = albedo.mul(0.3);
+  const cBlack = albedo.mul(0.42);
   const camoBase = mix(mix(mix(cMid, cDark, mDark), cLight, mLight.mul(float(1).sub(mDark.mul(0.6)))), cBlack, mBlack);
   const camo = mix(camoBase, cDark.mul(0.8), mSpeck);
 
@@ -126,7 +129,7 @@ function buildMaterial(): THREE.MeshStandardNodeMaterial {
   const hFold = fold.mul(0.0022).add(fold2.mul(0.003)).mul(fadeMid.mul(0.6).add(0.4));
   // Weave: fine orthogonal threads (≈4 mm repeat), close-range only.
   const k = (Math.PI * 2) / 0.004;
-  const weave = sin(p.x.add(p.z).mul(k)).mul(sin(p.y.mul(k))).mul(0.00008).mul(fadeFine);
+  const weave = sin(p.x.add(p.z).mul(k)).mul(sin(p.y.mul(k))).mul(0.00004).mul(fadeWeave);
   // PALS webbing rows on the plate carrier: 25 mm bands on a 38 mm pitch.
   const f = fract(p.y.div(0.0381).add(0.3));
   const band = smoothstep(0.03, 0.09, f).sub(smoothstep(0.62, 0.68, f));
@@ -135,7 +138,7 @@ function buildMaterial(): THREE.MeshStandardNodeMaterial {
   // Knit, leather grain + creases, rubber, hard-surface paint grain.
   const hKnit = mx_noise_float(p.mul(vec3(120, 40, 120))).mul(0.00025).mul(fadeFine.mul(0.7).add(0.3));
   const hLea = mx_noise_float(p.mul(85)).mul(0.00018).add(mx_noise_float(p.mul(vec3(16, 46, 16))).mul(0.0007));
-  const hRub = sin(p.z.mul((Math.PI * 2) / 0.011)).mul(0.0006).mul(fadeMid);
+  const hRub = mx_noise_float(p.mul(60)).mul(0.0002); // plain moulded edge, no ribs
   const hGrain = mx_noise_float(p.mul(140)).mul(0.00012).mul(fadeFine.mul(0.6).add(0.4));
 
   const h = mFab
@@ -180,14 +183,16 @@ function buildMaterial(): THREE.MeshStandardNodeMaterial {
   const nv = normalView;
   const fres = float(1).sub(nv.dot(positionView.normalize().negate()).clamp(0, 1)).pow(3);
   const skyward = normalWorld.y.mul(0.5).add(0.5);
-  const rim = vec3(0.5, 0.62, 0.8).mul(fres.mul(skyward).mul(0.15).mul(float(1).sub(mGloss)));
+  const rim = vec3(0.5, 0.62, 0.8).mul(fres.mul(skyward).mul(0.25).mul(float(1).sub(mGloss)));
+  // Skin keeps a faint floor so the eye opening never goes to a black void in shade.
+  const skinFloor = albedo.mul(mSkin.mul(0.08));
 
   const m = new THREE.MeshStandardNodeMaterial();
   m.colorNode = col;
   m.roughnessNode = rough;
   m.metalnessNode = surf.y;
   m.normalNode = bumped;
-  m.emissiveNode = rim;
+  m.emissiveNode = rim.add(skinFloor);
   return m;
 }
 

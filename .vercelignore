@@ -1,0 +1,7 @@
+node_modules
+**/node_modules
+dist
+**/dist
+.claude
+qa/shots
+tools/assets/.cache
